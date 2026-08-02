@@ -46,3 +46,9 @@
 - Thought trail 现在只移除每步开头的 `Thinking:` 前缀，保留原始思考内容和树形结构。
 - `/jielumoon-tui` 无参数直接打开 Footer 设置面板；`settings/reset/on/off` 子命令继续可用。
 - Git 仓库已初始化为 `main`，最终 commit 已完成。
+
+## 2026-08-03：Thought trail 正文颜色统一
+- 原因：Markdown/ANSI 保留逻辑导致第一条正文和后续正文走不同渲染路径，颜色不一致。
+- 修改 `src/thinking-message.ts`：所有 Thought trail 正文统一经过 `softBody()`，只保留树枝与菱形的渐变色。
+- `npm run typecheck`、`npm run pack:check`、`npm audit --omit=dev`：通过。
+- 已重新安装 `pi-jielumoon-tui`。

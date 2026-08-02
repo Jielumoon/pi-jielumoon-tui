@@ -194,11 +194,8 @@ class ThinkingTrailComponent implements Component {
 			const plain = stripAnsi(line);
 			const cleanedPlain = plain.replace(THINKING_PREFIX_PATTERN, "");
 			// Thought trail 只展示内容，不重复模型自带的思考前缀。
-			const bodyText = cleanedPlain !== plain
-				? softBody(theme, cleanedPlain)
-				: line.includes("\x1b[")
-					? line
-					: softBody(theme, plain);
+			// 所有正文统一使用柔和文字色，避免第一行和后续行走不同的 ANSI 样式路径。
+			const bodyText = softBody(theme, cleanedPlain);
 			body.push(truncateToWidth(`  ${branch}${marker}${bodyText}`, width, ""));
 			emitted += 1;
 		}

@@ -58,6 +58,12 @@ Complete
 - [x] 初始化 Git 仓库并提交最终版本
 - **Status:** complete
 
+### Phase 9: 统一 Thought trail 正文颜色
+- [x] 修复只有第一条思考正文带颜色的问题
+- [x] 让所有正文统一经过 `softBody()`，保留树枝和菱形渐变
+- [x] 类型检查、打包检查、审计并重新安装
+- **Status:** complete
+
 ## Decisions Made
 | Decision | Rationale |
 |----------|-----------|
