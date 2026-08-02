@@ -1,0 +1,54 @@
+{
+  "name": "pi-jielumoon-tui",
+  "version": "0.2.0",
+  "description": "pi-vibrant-footer with a sakura-style Thought trail for Pi",
+  "type": "module",
+  "license": "MIT",
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "pi-tui",
+    "footer",
+    "thinking",
+    "usage",
+    "quota"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "pack:check": "npm pack --dry-run --ignore-scripts"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-ai": ">=0.83.0",
+    "@earendil-works/pi-coding-agent": ">=0.83.0",
+    "@earendil-works/pi-tui": ">=0.83.0"
+  },
+  "dependencies": {
+    "@narumitw/pi-tui-kit": "^0.41.0",
+    "@narumitw/pi-usage": "0.43.0"
+  },
+  "bundledDependencies": [
+    "@narumitw/pi-tui-kit",
+    "@narumitw/pi-usage"
+  ],
+  "pi": {
+    "extensions": [
+      "./src/nano-context.ts",
+      "./src/vibrant-footer.ts",
+      "./src/thinking.ts",
+      "./node_modules/@narumitw/pi-usage/src/index.ts"
+    ]
+  },
+  "files": [
+    "src",
+    "README.md",
+    "LICENSE",
+    "package.json"
+  ],
+  "devDependencies": {
+    "@types/node": "^26.1.2",
+    "typescript": "^7.0.2"
+  }
+}
