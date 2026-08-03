@@ -15,3 +15,5 @@
 2026-08-03 06:30---消息增多后 TUI 出现卡顿---消息边框扩展每次重绘都重复计算历史用户 Markdown 与已完成工具边框---修改 `src/message-borders.ts`，增加用户消息/已完成工具缓存和 invalidate 清理；流式工具保持实时渲染；类型检查、打包检查、依赖审计、RPC 加载和重新安装均通过。
 
 2026-08-03 06:45---用户要求主动排查潜在优化，避免问题由用户发现---审计 Thought trail、Bash/工具边框、隐藏思考标签、nano-context token 估算和 patch 生命周期---修改 `src/thinking-message.ts`、`src/message-borders.ts`、`src/nano-context.ts`、`src/thinking.ts`、`src/prototype-patch-registry.ts`；增加完成态缓存、热路径快速判断、上下文历史消息缓存和 shutdown 清理；所有验证通过。
+
+2026-08-03 07:00---用户指出 Thought trail 整体相较工具块向右偏移---移除标题、正文、截断提示和隐藏思考标签的额外左侧缩进，使其从与工具块相同的第 0 列开始---修改 `src/thinking-message.ts`；类型检查、打包检查、依赖审计、RPC 加载和重新安装均通过。

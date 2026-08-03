@@ -97,6 +97,12 @@ Complete
 - [x] 类型检查、打包检查、审计、RPC 加载并重新安装
 - **Status:** complete
 
+### Phase 15: 对齐 Thought trail 与工具块
+- [x] 移除 Thought trail 标题、正文和截断提示的额外左侧缩进
+- [x] 移除隐藏思考标签继承的左侧 padding
+- [x] 类型检查、打包检查、审计、RPC 加载并重新安装
+- **Status:** complete
+
 ## Decisions Made
 | Decision | Rationale |
 |----------|-----------|
