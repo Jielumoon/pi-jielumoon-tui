@@ -131,12 +131,19 @@ function gradientBranch(text: string): string {
  *   ╰─ ◇ last step…
  */
 class ThinkingTrailComponent implements Component {
+	private cachedWidth: number | undefined;
+	private cachedTheme: Theme | undefined;
+	private cachedLines: string[] | undefined;
+
 	constructor(
 		private readonly inner: Component,
 		private readonly getTheme: () => Theme | undefined,
 	) {}
 
 	invalidate(): void {
+		this.cachedWidth = undefined;
+		this.cachedTheme = undefined;
+		this.cachedLines = undefined;
 		this.inner.invalidate?.();
 	}
 
@@ -144,6 +151,7 @@ class ThinkingTrailComponent implements Component {
 		if (width < 8) return this.inner.render(width);
 		const theme = this.getTheme();
 		if (!theme) return this.inner.render(width);
+		if (this.cachedWidth === width && this.cachedTheme === theme && this.cachedLines !== undefined) return this.cachedLines;
 
 		// "├─ ◇ " / "│    " ≈ 6 cols
 		const prefixWidth = 6;
@@ -160,7 +168,12 @@ class ThinkingTrailComponent implements Component {
 			rows.push({ line: removeOutputPadding(removeTrailingPadding(line)), step: startsStep });
 			startsStep = false;
 		}
-		if (rows.length === 0) return [];
+		if (rows.length === 0) {
+			this.cachedWidth = width;
+			this.cachedTheme = theme;
+			this.cachedLines = [];
+			return this.cachedLines;
+		}
 
 		const stepCount = rows.filter((row) => row.step).length;
 		const mark = renderSakuraGradient("✦");
@@ -209,12 +222,19 @@ class ThinkingTrailComponent implements Component {
 
 		// No leading blank — AssistantMessage already inserts Spacer(1) before content.
 		// Extra "" stacked with that Spacer and made the hole under user messages huge.
-		return [header, ...body];
+		this.cachedWidth = width;
+		this.cachedTheme = theme;
+		this.cachedLines = [header, ...body];
+		return this.cachedLines;
 	}
 }
 
 /** Recolor collapsed "✦ Thinking" placeholders that Pi themes as plain thinkingText. */
 function recolorHiddenThinkingLines(lines: string[]): string[] {
+	if (!lines.some((line) => line.includes("Thinking") || line.includes("Thought") || line.includes("✦"))) {
+		return lines;
+	}
+
 	return lines.map((line) => {
 		const plain = stripAnsi(line).trim();
 		let label: string | undefined;
@@ -264,10 +284,8 @@ export function installThinkingMessageStyle(getTheme: () => Theme | undefined): 
 		"assistant-thinking-hidden-render",
 		({ predecessor, receiver, args }) => {
 			const rendered = Reflect.apply(predecessor, receiver, args);
-			if (!Array.isArray(rendered) || !rendered.every((line) => typeof line === "string")) {
-				return rendered;
-			}
-			// Collapsed placeholders + any leftover plain "Thinking..." lines.
+			if (!Array.isArray(rendered)) return rendered;
+			// AssistantMessageComponent.render() is typed as string[]; avoid a second full-line type scan here.
 			return recolorHiddenThinkingLines(rendered as string[]);
 		},
 	);

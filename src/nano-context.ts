@@ -140,24 +140,51 @@ const addAssistantTokens = (segments: WritableContextSegments, content: unknown)
 	}
 };
 
+type MessageSegmentCache = {
+	role: unknown;
+	content: unknown;
+	segments: ContextSegments;
+};
+
+const messageSegmentCache = new WeakMap<object, MessageSegmentCache>();
+
+const addSegments = (target: WritableContextSegments, source: ContextSegments): void => {
+	target.system += source.system;
+	target.prompt += source.prompt;
+	target.assistant += source.assistant;
+	target.thinking += source.thinking;
+	target.tools += source.tools;
+};
+
+const segmentMessage = (message: Record<string, unknown>, forceRefresh: boolean): ContextSegments => {
+	const cached = messageSegmentCache.get(message);
+	if (!forceRefresh && cached !== undefined && cached.role === message.role && cached.content === message.content) {
+		return cached.segments;
+	}
+
+	const segments = emptyContextSegments();
+	if (message.role === "user") {
+		segments.prompt = estimateContentTokens(message.content);
+	} else if (message.role === "assistant") {
+		addAssistantTokens(segments, message.content);
+	} else if (message.role === "toolResult") {
+		segments.tools = estimateContentTokens(message.content);
+	}
+
+	if (!forceRefresh) {
+		messageSegmentCache.set(message, { role: message.role, content: message.content, segments });
+	}
+	return segments;
+};
+
 const segmentSessionMessages = (messages: readonly unknown[], systemPrompt: string): ContextSegments => {
 	const segments = emptyContextSegments();
 	segments.system = estimateTextTokens(systemPrompt);
 
-	for (const message of messages) {
+	for (let index = 0; index < messages.length; index++) {
+		const message = messages[index];
 		if (!isRecord(message)) continue;
-
-		if (message.role === "user") {
-			segments.prompt += estimateContentTokens(message.content);
-		}
-
-		if (message.role === "assistant") {
-			addAssistantTokens(segments, message.content);
-		}
-
-		if (message.role === "toolResult") {
-			segments.tools += estimateContentTokens(message.content);
-		}
+		addSegments(segments, segmentMessage(message, index === messages.length - 1));
 	}
 
 	return segments;

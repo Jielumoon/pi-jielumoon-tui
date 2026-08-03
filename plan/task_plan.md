@@ -90,6 +90,13 @@ Complete
 - [x] 类型检查、打包检查、审计并重新安装
 - **Status:** complete
 
+### Phase 14: 主动性能审计与资源生命周期
+- [x] 缓存 Thought trail、已完成 Bash 输出和上下文消息 token 估算
+- [x] 优化隐藏思考标签与工具输出的热路径，避免重复全量扫描
+- [x] 修复 Thought trail prototype patch 在 session shutdown 时未清理的问题
+- [x] 类型检查、打包检查、审计、RPC 加载并重新安装
+- **Status:** complete
+
 ## Decisions Made
 | Decision | Rationale |
 |----------|-----------|

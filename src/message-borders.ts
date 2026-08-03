@@ -50,8 +50,25 @@ type ToolRenderCache = {
 	lines: RenderedLines;
 };
 
+type BashRuntime = {
+	status?: "running" | "complete" | "cancelled" | "error";
+	outputLines?: readonly string[];
+	expanded?: boolean;
+};
+
+type BashRenderCache = {
+	width: number;
+	outputLines: readonly string[] | undefined;
+	outputLength: number;
+	lastOutputLine: string | undefined;
+	status: BashRuntime["status"];
+	expanded: boolean;
+	lines: RenderedLines;
+};
+
 const userMessageRenderCache = new WeakMap<object, UserMessageRenderCache>();
 const toolRenderCache = new WeakMap<object, ToolRenderCache>();
+const bashRenderCache = new WeakMap<object, BashRenderCache>();
 
 const MIN_BORDER_WIDTH = 8;
 const OSC133_ZONE_START = "\x1b]133;A\x07";
@@ -62,7 +79,8 @@ const RAIL_SUCCESS = [174, 229, 197] as const;
 const RAIL_ERROR = [255, 143, 163] as const;
 
 function isRenderedLines(value: unknown): value is RenderedLines {
-	return Array.isArray(value) && value.every((line) => typeof line === "string");
+	// Pi's Component.render contract already guarantees string[]; avoid scanning every line twice.
+	return Array.isArray(value);
 }
 
 function isObject(value: unknown): value is object {
@@ -360,10 +378,52 @@ export function installMessageBorders(getTheme: () => Theme | undefined): Cleanu
 		"render",
 		"bash-execution-render",
 		({ predecessor, receiver, args }) => {
-			const rendered = Reflect.apply(predecessor, receiver, args);
+			const runtime = receiver as BashRuntime;
 			const width = args[0];
+			const outputLines = runtime.outputLines;
+			const outputLength = outputLines?.length ?? 0;
+			const lastOutputLine = outputLines?.at(-1);
+			const settled = runtime.status !== undefined && runtime.status !== "running";
+
+			if (typeof width === "number" && isObject(receiver) && settled) {
+				const cached = bashRenderCache.get(receiver);
+				if (
+					cached?.width === width &&
+					cached.outputLines === outputLines &&
+					cached.outputLength === outputLength &&
+					cached.lastOutputLine === lastOutputLine &&
+					cached.status === runtime.status &&
+					cached.expanded === Boolean(runtime.expanded)
+				) {
+					return cached.lines;
+				}
+			}
+
+			const rendered = Reflect.apply(predecessor, receiver, args);
 			if (!isRenderedLines(rendered) || typeof width !== "number") return rendered;
-			return repaintBashBorders(rendered, width);
+			const repainted = repaintBashBorders(rendered, width);
+			if (isObject(receiver) && settled) {
+				bashRenderCache.set(receiver, {
+					width,
+					outputLines,
+					outputLength,
+					lastOutputLine,
+					status: runtime.status,
+					expanded: Boolean(runtime.expanded),
+					lines: repainted,
+				});
+			}
+			return repainted;
+		},
+	);
+
+	const cleanupBashInvalidate = installPrototypePatch(
+		BashExecutionComponent.prototype,
+		"invalidate",
+		"bash-execution-invalidate",
+		({ predecessor, receiver, args }) => {
+			if (isObject(receiver)) bashRenderCache.delete(receiver);
+			return Reflect.apply(predecessor, receiver, args);
 		},
 	);
 
@@ -371,6 +431,7 @@ export function installMessageBorders(getTheme: () => Theme | undefined): Cleanu
 	return () => {
 		if (cleaned) return;
 		cleaned = true;
+		cleanupBashInvalidate();
 		cleanupBashMessage();
 		cleanupToolInvalidate();
 		cleanupToolMessage();

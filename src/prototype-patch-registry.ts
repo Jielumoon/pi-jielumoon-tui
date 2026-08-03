@@ -7,6 +7,7 @@ type PrototypePatchAdapter =
 	| "tool-execution-render"
 	| "tool-execution-invalidate"
 	| "bash-execution-render"
+	| "bash-execution-invalidate"
 	| "assistant-thinking-content"
 	| "assistant-thinking-hidden-render";
 

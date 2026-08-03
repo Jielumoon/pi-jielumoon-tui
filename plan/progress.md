@@ -82,3 +82,10 @@
 - `src/message-borders.ts` 新增用户消息缓存、已完成工具缓存，以及 `invalidate` 失效清理；流式工具不缓存，保持实时输出。
 - `npm run typecheck`、`npm run pack:check`、`npm audit --omit=dev`、RPC 加载：通过。
 - 已重新安装 `pi-jielumoon-tui`。
+
+## 2026-08-03：主动性能审计与资源生命周期
+- 审计发现 Thought trail 组件、已完成 Bash 边框、隐藏思考标签和 nano-context token 估算仍有可避免的重复计算。
+- `src/thinking-message.ts` 增加按宽度/主题缓存、快速路径和失效清理；`src/message-borders.ts` 增加 Bash 完成态缓存及 invalidate patch；`src/nano-context.ts` 缓存历史消息 token 分段。
+- 修复 `src/thinking.ts` 在 session shutdown 后遗留 prototype patch 的资源生命周期问题。
+- `npm run typecheck`、`npm run pack:check`、`npm audit --omit=dev`、RPC 加载：通过。
+- 已重新安装 `pi-jielumoon-tui`。
