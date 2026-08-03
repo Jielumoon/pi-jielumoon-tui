@@ -97,6 +97,13 @@ Complete
 - [x] 类型检查、打包检查、审计、RPC 加载并重新安装
 - **Status:** complete
 
+### Phase 15: 恢复 Footer 即时刷新
+- [x] 确认 30 秒定时器与原版一致，未被延长
+- [x] 将 usage 和 Blackhole 的全量扫描移出普通 context/message/model 事件
+- [x] 保留轻量 snapshot 更新和立即 `requestRender`
+- [x] 类型检查、打包检查、审计、RPC 加载并重新安装
+- **Status:** complete
+
 ## Decisions Made
 | Decision | Rationale |
 |----------|-----------|

@@ -89,3 +89,10 @@
 - 修复 `src/thinking.ts` 在 session shutdown 后遗留 prototype patch 的资源生命周期问题。
 - `npm run typecheck`、`npm run pack:check`、`npm audit --omit=dev`、RPC 加载：通过。
 - 已重新安装 `pi-jielumoon-tui`。
+
+## 2026-08-03：恢复 Footer 即时刷新
+- 确认 30 秒定时器与原版 `pi-vibrant-footer` 一致，延迟来自普通事件中同步执行全量 usage/Blackhole 扫描。
+- `src/vibrant-footer.ts` 将 context、message_end、model 和 thinking 事件改为轻量 snapshot 更新；usage/Blackhole 全量采集仅在 agent_end、压缩、分支变化、设置变更和定时刷新执行。
+- 保留每次 snapshot 后立即调用 `tui.requestRender()`，不延迟 Footer 重绘。
+- `npm run typecheck`、`npm run pack:check`、`npm audit --omit=dev`、RPC 加载：通过。
+- 已重新安装 `pi-jielumoon-tui`。

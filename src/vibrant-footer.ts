@@ -28,8 +28,23 @@ export default function vibrantFooter(pi: ExtensionAPI): void {
 	let refreshTimer: ReturnType<typeof setInterval> | undefined;
 	let requestRender: (() => void) | undefined;
 
-	const refreshSnapshot = (ctx: ExtensionContext): void => {
+	type SnapshotRefreshOptions = {
+		usage?: boolean;
+		blackhole?: boolean;
+	};
+
+	const refreshSnapshot = (ctx: ExtensionContext, options: SnapshotRefreshOptions = {}): void => {
 		activeContext = ctx;
+		const previous = snapshot;
+		const refreshUsage = previous === undefined || options.usage === true;
+		const refreshBlackhole = previous === undefined || options.blackhole === true;
+		const usage = refreshUsage ? collectUsage(ctx) : previous.usage;
+		const blackhole = !settings.blackhole
+			? null
+			: refreshBlackhole
+				? collectBlackholeStatus(ctx)
+				: previous.blackhole;
+
 		snapshot = {
 			cwd: ctx.cwd,
 			sessionName: ctx.sessionManager.getSessionName(),
@@ -38,8 +53,8 @@ export default function vibrantFooter(pi: ExtensionAPI): void {
 			context: collectContextUsage(ctx),
 			model: collectModelSnapshot(ctx),
 			thinkingLevel: pi.getThinkingLevel(),
-			usage: collectUsage(ctx),
-			blackhole: settings.blackhole ? collectBlackholeStatus(ctx) : null,
+			usage,
+			blackhole,
 		};
 		requestRender?.();
 	};
@@ -55,7 +70,7 @@ export default function vibrantFooter(pi: ExtensionAPI): void {
 		if (ctx.mode !== "tui") return;
 
 		refreshTimer = setInterval(() => {
-			if (enabled && activeContext) refreshSnapshot(activeContext);
+			if (enabled && activeContext) refreshSnapshot(activeContext, { blackhole: true });
 		}, REFRESH_INTERVAL_MS);
 	};
 
@@ -72,7 +87,7 @@ export default function vibrantFooter(pi: ExtensionAPI): void {
 			const renderRequest = (): void => tui.requestRender();
 			requestRender = renderRequest;
 			const unsubscribeBranch = footerData.onBranchChange(() => {
-				if (activeContext) refreshSnapshot(activeContext);
+				if (activeContext) refreshSnapshot(activeContext, { blackhole: true });
 				else renderRequest();
 			});
 
@@ -101,7 +116,7 @@ export default function vibrantFooter(pi: ExtensionAPI): void {
 	};
 
 	const refreshAndApply = (ctx: ExtensionContext): void => {
-		refreshSnapshot(ctx);
+		refreshSnapshot(ctx, { usage: true, blackhole: true });
 		applyFooter(ctx);
 	};
 
@@ -112,17 +127,21 @@ export default function vibrantFooter(pi: ExtensionAPI): void {
 		startRefreshLoop(ctx);
 	});
 
-	const refreshIfEnabled = (_event: unknown, ctx: ExtensionContext): void => {
+	const refreshLightweight = (_event: unknown, ctx: ExtensionContext): void => {
 		if (enabled) refreshSnapshot(ctx);
 	};
 
-	pi.on("context", refreshIfEnabled);
-	pi.on("message_end", refreshIfEnabled);
-	pi.on("agent_end", refreshIfEnabled);
-	pi.on("session_compact", refreshIfEnabled);
-	pi.on("session_tree", refreshIfEnabled);
-	pi.on("model_select", refreshIfEnabled);
-	pi.on("thinking_level_select", refreshIfEnabled);
+	const refreshHeavy = (_event: unknown, ctx: ExtensionContext): void => {
+		if (enabled) refreshSnapshot(ctx, { usage: true, blackhole: true });
+	};
+
+	pi.on("context", refreshLightweight);
+	pi.on("message_end", refreshLightweight);
+	pi.on("agent_end", refreshHeavy);
+	pi.on("session_compact", refreshHeavy);
+	pi.on("session_tree", refreshHeavy);
+	pi.on("model_select", refreshLightweight);
+	pi.on("thinking_level_select", refreshLightweight);
 
 	pi.on("session_shutdown", (_event, ctx) => {
 		stopRefreshLoop();
