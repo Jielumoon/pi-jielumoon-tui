@@ -181,7 +181,7 @@ class ThinkingTrailComponent implements Component {
 		const labelCore =
 			stepCount > 1 ? ` Thought trail · ${stepCount} steps` : " Thought trail";
 		const label = renderSakuraGradient(labelCore);
-		const header = truncateToWidth(`${mark}${label}`, width, "");
+		const header = truncateToWidth(`  ${mark}${label}`, width, "");
 
 		const body: string[] = [];
 		let currentStep = 0;
@@ -209,7 +209,7 @@ class ThinkingTrailComponent implements Component {
 			// Thought trail 只展示内容，不重复模型自带的思考前缀。
 			// 所有正文统一使用柔和文字色，避免第一行和后续行走不同的 ANSI 样式路径。
 			const bodyText = softBody(theme, cleanedPlain);
-			body.push(truncateToWidth(`${branch}${marker}${bodyText}`, width, ""));
+			body.push(truncateToWidth(`  ${branch}${marker}${bodyText}`, width, ""));
 			emitted += 1;
 		}
 
@@ -217,7 +217,7 @@ class ThinkingTrailComponent implements Component {
 			const more = Math.max(0, rows.length - MAX_PREVIEW_LINES);
 			const hint = softBody(theme, `… +${more} more · Ctrl+T collapses trail`);
 			const endBranch = gradientBranch("╰─ ");
-			body.push(truncateToWidth(`${endBranch}${hint}`, width, ""));
+			body.push(truncateToWidth(`  ${endBranch}${hint}`, width, ""));
 		}
 
 		// No leading blank — AssistantMessage already inserts Spacer(1) before content.
@@ -252,7 +252,8 @@ function recolorHiddenThinkingLines(lines: string[]): string[] {
 			label = plain.startsWith("✦") ? plain : `✦ ${plain}`;
 		}
 		if (!label) return line;
-		return renderSakuraGradient(label);
+		const pad = line.match(/^\s*/)?.[0] ?? "";
+		return `${pad}${renderSakuraGradient(label)}`;
 	});
 }
 

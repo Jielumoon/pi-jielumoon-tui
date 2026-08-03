@@ -89,9 +89,3 @@
 - 修复 `src/thinking.ts` 在 session shutdown 后遗留 prototype patch 的资源生命周期问题。
 - `npm run typecheck`、`npm run pack:check`、`npm audit --omit=dev`、RPC 加载：通过。
 - 已重新安装 `pi-jielumoon-tui`。
-
-## 2026-08-03：对齐 Thought trail 与工具块
-- 用户确认需要将 Thought trail 整体左移，与工具块从同一列开始。
-- 移除标题、树形正文、截断提示的两格额外缩进；隐藏思考标签不再保留原始左侧 padding。
-- `npm run typecheck`、`npm run pack:check`、`npm audit --omit=dev`、RPC 加载：通过。
-- 已重新安装 `pi-jielumoon-tui`。
