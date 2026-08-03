@@ -24,4 +24,4 @@
 
 2026-08-03 08:30---用户要求 `Worked for Ns` 与 `✦ Thought trail` 对齐并放慢渐变---给 transcript 文案增加两个前导空格；将 macaron shimmer 周期设为约 2.8 秒，工作文案 180ms 更新，spinner 保持原生 80ms 转动---修改 `src/working.ts`、`plan/*`；定向 probe、类型检查、打包检查、依赖审计、RPC 加载和安装均通过。
 
-2026-08-03 08:40---用户要求重写 README 并上传到 GitHub---重写完整中文 README，补充特性、安装、命令、配置、开发、扩展入口和兼容性说明；配置 `origin` 指向 `https://github.com/Jielumoon/pi-jielumoon-tui.git`---修改 `README.md`、`plan/*`；发布前验证与提交进行中。
+2026-08-03 08:40---用户要求重写 README 并上传到 GitHub---重写完整中文 README，补充特性、安装、命令、配置、开发、扩展入口和兼容性说明；先配置 HTTPS 远程，因当前环境无 HTTPS 凭据改用已验证的 SSH 认证---修改 `README.md`、`plan/*`，将 `origin` 切换为 `git@github.com:Jielumoon/pi-jielumoon-tui.git`；类型检查、打包检查、依赖审计、RPC 加载均通过，并以 `--force-with-lease` 覆盖远程 `master`，远程提交为 `a21932f`。

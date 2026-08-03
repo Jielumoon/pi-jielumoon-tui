@@ -132,9 +132,9 @@ Complete
 
 ### Phase 20: 重写 README 并发布项目
 - [x] 重写安装、功能、命令、开发和兼容性说明
-- [x] 配置 `origin` 为 `https://github.com/Jielumoon/pi-jielumoon-tui.git`
-- [ ] 通过验证后提交并覆盖远程 `master`
-- **Status:** in_progress
+- [x] 配置 `origin` 为 `git@github.com:Jielumoon/pi-jielumoon-tui.git`
+- [x] 通过验证后提交并覆盖远程 `master`
+- **Status:** complete
 
 
 ## Decisions Made
