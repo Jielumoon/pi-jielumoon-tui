@@ -6,12 +6,13 @@ type PrototypePatchAdapter =
 	| "selector-border-render"
 	| "tool-execution-render"
 	| "tool-execution-invalidate"
+	| "tool-execution-update-display"
 	| "bash-execution-render"
 	| "bash-execution-invalidate"
 	| "assistant-thinking-content"
 	| "assistant-thinking-hidden-render";
 
-type PrototypeMethodName = "render" | "invalidate" | "updateContent";
+type PrototypeMethodName = "render" | "invalidate" | "updateContent" | "updateDisplay";
 type PrototypeMethod = (this: unknown, ...args: unknown[]) => unknown;
 
 type PatchInvocation = {

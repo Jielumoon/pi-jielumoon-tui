@@ -17,3 +17,5 @@
 2026-08-03 06:45---用户要求主动排查潜在优化，避免问题由用户发现---审计 Thought trail、Bash/工具边框、隐藏思考标签、nano-context token 估算和 patch 生命周期---修改 `src/thinking-message.ts`、`src/message-borders.ts`、`src/nano-context.ts`、`src/thinking.ts`、`src/prototype-patch-registry.ts`；增加完成态缓存、热路径快速判断、上下文历史消息缓存和 shutdown 清理；所有验证通过。
 
 2026-08-03 07:20---用户反馈 Footer 延迟更新---确认原版 30 秒定时器未改变，真正瓶颈是普通事件中同步全量扫描 usage 和 Blackhole，阻塞 TUI 重绘---修改 `src/vibrant-footer.ts`，按事件拆分轻量与重型 snapshot 刷新，保留立即 `requestRender`；类型检查、打包检查、依赖审计、RPC 加载和重新安装均通过。
+
+2026-08-03 08:00---代码审查后用户明确要求 Blackhole 指标保持实时、不缓存，并修复其余性能与可靠性问题---Blackhole 每次基于当前 branch 重算但单次只估算每个 source 一次；usage 改为 append-only 增量累计；nano-context 复用事件 messages；工具缓存使用 updateDisplay revision 失效；恢复渲染边界校验---修改 `src/footer/blackhole.ts`、`src/footer/usage.ts`、`src/vibrant-footer.ts`、`src/nano-context.ts`、`src/message-borders.ts`、`src/prototype-patch-registry.ts`、`src/thinking-message.ts`；类型检查、打包检查、依赖审计、RPC 加载、四项定向行为验证和重新安装均通过。

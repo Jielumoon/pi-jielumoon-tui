@@ -1,30 +1,64 @@
 import type { AssistantMessage } from "@earendil-works/pi-ai";
-import { type ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { type ExtensionContext, type SessionEntry } from "@earendil-works/pi-coding-agent";
 import type { ContextUsageSnapshot, ModelSnapshot, UsageTotals } from "./types.ts";
 
+type UsageCounters = Omit<UsageTotals, "cacheHitRate">;
 
-export function collectUsage(ctx: ExtensionContext): UsageTotals {
-	let input = 0;
-	let output = 0;
-	let cacheRead = 0;
-	let cacheWrite = 0;
-	let cost = 0;
+const emptyUsageCounters = (): UsageCounters => ({
+	input: 0,
+	output: 0,
+	cacheRead: 0,
+	cacheWrite: 0,
+	cost: 0,
+});
 
-	for (const entry of ctx.sessionManager.getEntries()) {
-		if (entry.type !== "message" || entry.message.role !== "assistant") continue;
+const finalizeUsage = (totals: UsageCounters): UsageTotals => {
+	const prompt = totals.input + totals.cacheRead + totals.cacheWrite;
+	return {
+		...totals,
+		cacheHitRate: prompt > 0 ? (totals.cacheRead / prompt) * 100 : undefined,
+	};
+};
 
-		const message = entry.message as AssistantMessage;
-		input += message.usage.input;
-		output += message.usage.output;
-		cacheRead += message.usage.cacheRead;
-		cacheWrite += message.usage.cacheWrite;
-		cost += message.usage.cost.total;
+/** 会话条目只追加，因此只累计本次新增的条目。 */
+export class SessionUsageCollector {
+	private entryCount = 0;
+	private lastEntry: SessionEntry | undefined;
+	private totals = emptyUsageCounters();
+
+	reset(): void {
+		this.entryCount = 0;
+		this.lastEntry = undefined;
+		this.totals = emptyUsageCounters();
 	}
 
-	const prompt = input + cacheRead + cacheWrite;
-	const cacheHitRate = prompt > 0 ? (cacheRead / prompt) * 100 : undefined;
+	collect(ctx: ExtensionContext): UsageTotals {
+		const entries = ctx.sessionManager.getEntries();
+		const prefixIsStable =
+			this.entryCount <= entries.length &&
+			(this.entryCount === 0 || entries[this.entryCount - 1] === this.lastEntry);
+		if (!prefixIsStable) this.reset();
 
-	return { input, output, cacheRead, cacheWrite, cost, cacheHitRate };
+		for (let index = this.entryCount; index < entries.length; index++) {
+			const entry = entries[index]!;
+			if (entry.type !== "message" || entry.message.role !== "assistant") continue;
+
+			const message = entry.message as AssistantMessage;
+			this.totals.input += message.usage.input;
+			this.totals.output += message.usage.output;
+			this.totals.cacheRead += message.usage.cacheRead;
+			this.totals.cacheWrite += message.usage.cacheWrite;
+			this.totals.cost += message.usage.cost.total;
+		}
+
+		this.entryCount = entries.length;
+		this.lastEntry = entries.at(-1);
+		return finalizeUsage(this.totals);
+	}
+}
+
+export function collectUsage(ctx: ExtensionContext): UsageTotals {
+	return new SessionUsageCollector().collect(ctx);
 }
 
 export function collectContextUsage(ctx: ExtensionContext): ContextUsageSnapshot {

@@ -284,9 +284,9 @@ export function installThinkingMessageStyle(getTheme: () => Theme | undefined): 
 		"assistant-thinking-hidden-render",
 		({ predecessor, receiver, args }) => {
 			const rendered = Reflect.apply(predecessor, receiver, args);
-			if (!Array.isArray(rendered)) return rendered;
-			// AssistantMessageComponent.render() is typed as string[]; avoid a second full-line type scan here.
-			return recolorHiddenThinkingLines(rendered as string[]);
+			if (!Array.isArray(rendered) || !rendered.every((line) => typeof line === "string")) return rendered;
+			// Collapsed placeholders + any leftover plain "Thinking..." lines.
+			return recolorHiddenThinkingLines(rendered);
 		},
 	);
 

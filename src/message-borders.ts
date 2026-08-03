@@ -43,6 +43,7 @@ type UserMessageRenderCache = {
 };
 
 type ToolRenderCache = {
+	revision: number;
 	width: number;
 	result: ToolRuntime["result"];
 	expanded: boolean;
@@ -68,6 +69,7 @@ type BashRenderCache = {
 
 const userMessageRenderCache = new WeakMap<object, UserMessageRenderCache>();
 const toolRenderCache = new WeakMap<object, ToolRenderCache>();
+const toolRenderRevision = new WeakMap<object, number>();
 const bashRenderCache = new WeakMap<object, BashRenderCache>();
 
 const MIN_BORDER_WIDTH = 8;
@@ -79,8 +81,7 @@ const RAIL_SUCCESS = [174, 229, 197] as const;
 const RAIL_ERROR = [255, 143, 163] as const;
 
 function isRenderedLines(value: unknown): value is RenderedLines {
-	// Pi's Component.render contract already guarantees string[]; avoid scanning every line twice.
-	return Array.isArray(value);
+	return Array.isArray(value) && value.every((line) => typeof line === "string");
 }
 
 function isObject(value: unknown): value is object {
@@ -333,7 +334,8 @@ export function installMessageBorders(getTheme: () => Theme | undefined): Cleanu
 			) {
 				const cached = toolRenderCache.get(receiver);
 				if (
-					cached?.width === width &&
+					cached?.revision === (toolRenderRevision.get(receiver) ?? 0) &&
+					cached.width === width &&
 					cached.result === runtime.result &&
 					cached.expanded === Boolean(runtime.expanded) &&
 					cached.showImages === Boolean(runtime.showImages)
@@ -352,6 +354,7 @@ export function installMessageBorders(getTheme: () => Theme | undefined): Cleanu
 				!containsResultImage(runtime)
 			) {
 				toolRenderCache.set(receiver, {
+					revision: toolRenderRevision.get(receiver) ?? 0,
 					width,
 					result: runtime.result,
 					expanded: Boolean(runtime.expanded),
@@ -368,8 +371,25 @@ export function installMessageBorders(getTheme: () => Theme | undefined): Cleanu
 		"invalidate",
 		"tool-execution-invalidate",
 		({ predecessor, receiver, args }) => {
-			if (isObject(receiver)) toolRenderCache.delete(receiver);
+			if (isObject(receiver)) {
+				toolRenderRevision.set(receiver, (toolRenderRevision.get(receiver) ?? 0) + 1);
+				toolRenderCache.delete(receiver);
+			}
 			return Reflect.apply(predecessor, receiver, args);
+		},
+	);
+
+	const cleanupToolUpdateDisplay = installPrototypePatch(
+		ToolExecutionComponent.prototype,
+		"updateDisplay",
+		"tool-execution-update-display",
+		({ predecessor, receiver, args }) => {
+			const result = Reflect.apply(predecessor, receiver, args);
+			if (isObject(receiver)) {
+				toolRenderRevision.set(receiver, (toolRenderRevision.get(receiver) ?? 0) + 1);
+				toolRenderCache.delete(receiver);
+			}
+			return result;
 		},
 	);
 
@@ -433,6 +453,7 @@ export function installMessageBorders(getTheme: () => Theme | undefined): Cleanu
 		cleaned = true;
 		cleanupBashInvalidate();
 		cleanupBashMessage();
+		cleanupToolUpdateDisplay();
 		cleanupToolInvalidate();
 		cleanupToolMessage();
 		cleanupUserInvalidate();

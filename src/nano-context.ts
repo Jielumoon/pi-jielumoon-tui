@@ -235,7 +235,6 @@ const scaleSegmentsToUsage = (segments: ContextSegments, usedTokens: number): Co
 
 const sessionMessages = (ctx: ExtensionContext): readonly unknown[] => {
 	const context = buildSessionContext(ctx.sessionManager.getEntries(), ctx.sessionManager.getLeafId());
-
 	return context.messages as readonly unknown[];
 };
 
@@ -351,7 +350,7 @@ const renderContextLine = (snapshot: ContextSnapshot, width: number, theme: Them
 	]);
 };
 
-const updateUi = (ctx: ExtensionContext, messages: readonly unknown[] = sessionMessages(ctx)): void => {
+const updateUi = (ctx: ExtensionContext, messages: readonly unknown[]): void => {
 	if (!ctx.hasUI) return;
 
 	const snapshot = makeContextSnapshot(ctx, messages);
@@ -362,46 +361,33 @@ const updateUi = (ctx: ExtensionContext, messages: readonly unknown[] = sessionM
 };
 
 export default function nanoContext(pi: ExtensionAPI): void {
-	let activeContext: ExtensionContext | undefined;
-	let resizeListening = false;
+	let activeMessages: readonly unknown[] | undefined;
+
+	const refreshFromMessages = (ctx: ExtensionContext, messages: readonly unknown[]): void => {
+		activeMessages = messages;
+		updateUi(ctx, messages);
+	};
 
 	const refreshFromSession = (ctx: ExtensionContext): void => {
-		activeContext = ctx;
-		updateUi(ctx);
+		refreshFromMessages(ctx, sessionMessages(ctx));
 	};
 
-	const refreshFromTerminalSize = (): void => {
-		if (activeContext) updateUi(activeContext);
+	const refreshFromActiveMessages = (ctx: ExtensionContext): void => {
+		if (activeMessages) refreshFromMessages(ctx, activeMessages);
+		else refreshFromSession(ctx);
 	};
 
-	const startResizeListener = (): void => {
-		if (resizeListening) return;
-		process.stdout.on("resize", refreshFromTerminalSize);
-		resizeListening = true;
-	};
+	pi.on("session_start", (_event, ctx) => refreshFromSession(ctx));
 
-	pi.on("session_start", (_event, ctx) => {
-		startResizeListener();
-		refreshFromSession(ctx);
-	});
-
-	pi.on("context", (event, ctx) => {
-		activeContext = ctx;
-		updateUi(ctx, event.messages as readonly unknown[]);
-	});
-
-	pi.on("agent_end", (_event, ctx) => refreshFromSession(ctx));
-	pi.on("model_select", (_event, ctx) => refreshFromSession(ctx));
-	pi.on("thinking_level_select", (_event, ctx) => refreshFromSession(ctx));
+	pi.on("context", (event, ctx) => refreshFromMessages(ctx, event.messages));
+	pi.on("agent_end", (event, ctx) => refreshFromMessages(ctx, event.messages));
+	pi.on("model_select", (_event, ctx) => refreshFromActiveMessages(ctx));
+	pi.on("thinking_level_select", (_event, ctx) => refreshFromActiveMessages(ctx));
 	pi.on("session_compact", (_event, ctx) => refreshFromSession(ctx));
 	pi.on("session_tree", (_event, ctx) => refreshFromSession(ctx));
 
 	pi.on("session_shutdown", (_event, ctx) => {
 		ctx.ui.setWidget(WIDGET_KEY, undefined, { placement: "belowEditor" });
-		activeContext = undefined;
-		if (resizeListening) {
-			process.stdout.off("resize", refreshFromTerminalSize);
-			resizeListening = false;
-		}
+		activeMessages = undefined;
 	});
 }

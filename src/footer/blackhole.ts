@@ -85,38 +85,41 @@ function isBlackholeSourceEntry(entry: BlackholeEntry): boolean {
 	return entry.type === "message" || entry.type === "custom_message" || entry.type === "branch_summary";
 }
 
-function sourceTokensAfter(entries: BlackholeEntry[], index: number): number {
-	let total = 0;
-	for (let i = Math.max(0, index + 1); i < entries.length; i++) {
-		if (isBlackholeSourceEntry(entries[i]!)) total += estimateBlackholeEntryTokens(entries[i]!);
-	}
-	return total;
-}
+type BlackholeBranchSummary = {
+	observerTokens: number;
+	reflectorTokens: number;
+	poolTokens: number;
+	compactionTokens: number;
+};
 
-function coverageIndex(
-	entries: BlackholeEntry[],
-	customType: string,
-	itemsKey: "observations" | "reflections" | "observationIds",
+function updateCoverageIndex(
+	current: number,
+	data: Record<string, unknown>,
+	itemsKey: "observations" | "reflections",
+	indexes: ReadonlyMap<string, number>,
 ): number {
-	const indexes = new Map<string, number>();
-	for (let i = 0; i < entries.length; i++) {
-		if (typeof entries[i]?.id === "string") indexes.set(entries[i]!.id as string, i);
-	}
-
-	let latest = -1;
-	for (const entry of entries) {
-		if (entry.type !== "custom" || entry.customType !== customType) continue;
-		const data = asRecord(entry.data);
-		if (!data || typeof data.coversUpToId !== "string" || !Array.isArray(data[itemsKey]) || data[itemsKey].length === 0) {
-			continue;
-		}
-		const index = indexes.get(data.coversUpToId);
-		if (index !== undefined && index > latest) latest = index;
-	}
-	return latest;
+	const items = data[itemsKey];
+	if (!Array.isArray(items) || items.length === 0 || typeof data.coversUpToId !== "string") return current;
+	const index = indexes.get(data.coversUpToId);
+	return index !== undefined && index > current ? index : current;
 }
 
-function collectBlackholeMemory(entries: BlackholeEntry[]): { poolTokens: number } {
+/** 每次基于当前 branch 重新计算；只消除一次刷新内部的重复 token 扫描，不保存历史结果。 */
+export function summarizeBlackholeBranch(entries: BlackholeEntry[]): BlackholeBranchSummary {
+	const indexes = new Map<string, number>();
+	const sourceTokenPrefix: number[] = [0];
+	let latestCompactionIndex = -1;
+
+	for (let index = 0; index < entries.length; index++) {
+		const entry = entries[index]!;
+		if (typeof entry.id === "string") indexes.set(entry.id, index);
+		if (entry.type === "compaction") latestCompactionIndex = index;
+		const sourceTokens = isBlackholeSourceEntry(entry) ? estimateBlackholeEntryTokens(entry) : 0;
+		sourceTokenPrefix.push(sourceTokenPrefix[index]! + sourceTokens);
+	}
+
+	let observerCoverageIndex = -1;
+	let reflectorCoverageIndex = -1;
 	const observations = new Map<string, number>();
 	const dropped = new Set<string>();
 
@@ -125,36 +128,52 @@ function collectBlackholeMemory(entries: BlackholeEntry[]): { poolTokens: number
 		const data = asRecord(entry.data);
 		if (!data) continue;
 
-		if (entry.customType === BLACKHOLE_OBSERVATIONS && Array.isArray(data.observations)) {
+		if (entry.customType === BLACKHOLE_OBSERVATIONS) {
+			observerCoverageIndex = updateCoverageIndex(observerCoverageIndex, data, "observations", indexes);
+			if (!Array.isArray(data.observations)) continue;
 			for (const item of data.observations) {
 				const observation = asRecord(item);
 				if (typeof observation?.id !== "string" || observations.has(observation.id)) continue;
 				observations.set(observation.id, positiveNumber(observation.tokenCount, 0));
 			}
-		} else if (entry.customType === BLACKHOLE_DROPPED && Array.isArray(data.observationIds)) {
+			continue;
+		}
+
+		if (entry.customType === BLACKHOLE_REFLECTIONS) {
+			reflectorCoverageIndex = updateCoverageIndex(reflectorCoverageIndex, data, "reflections", indexes);
+			continue;
+		}
+
+		if (entry.customType === BLACKHOLE_DROPPED && Array.isArray(data.observationIds)) {
 			for (const id of data.observationIds) if (typeof id === "string") dropped.add(id);
 		}
 	}
 
+	const totalSourceTokens = sourceTokenPrefix.at(-1) ?? 0;
+	const sourceTokensAfter = (index: number): number => {
+		const prefixIndex = Math.max(0, Math.min(entries.length, index + 1));
+		return totalSourceTokens - sourceTokenPrefix[prefixIndex]!;
+	};
+
 	let poolTokens = 0;
 	for (const [id, tokens] of observations) if (!dropped.has(id)) poolTokens += tokens;
-	return { poolTokens };
-}
 
-function blackholeCompactionTokens(entries: BlackholeEntry[]): number {
-	let compactionIndex = -1;
-	for (let i = entries.length - 1; i >= 0; i--) {
-		if (entries[i]?.type === "compaction") {
-			compactionIndex = i;
-			break;
+	let compactionCoverageIndex = -1;
+	if (latestCompactionIndex >= 0) {
+		compactionCoverageIndex = latestCompactionIndex;
+		const firstKeptEntryId = entries[latestCompactionIndex]?.firstKeptEntryId;
+		if (typeof firstKeptEntryId === "string") {
+			const firstKeptIndex = indexes.get(firstKeptEntryId);
+			if (firstKeptIndex !== undefined) compactionCoverageIndex = firstKeptIndex - 1;
 		}
 	}
-	if (compactionIndex < 0) return sourceTokensAfter(entries, -1);
 
-	const firstKeptEntryId = entries[compactionIndex]?.firstKeptEntryId;
-	if (typeof firstKeptEntryId !== "string") return sourceTokensAfter(entries, compactionIndex);
-	const firstKeptIndex = entries.findIndex((entry) => entry.id === firstKeptEntryId);
-	return sourceTokensAfter(entries, firstKeptIndex < 0 ? compactionIndex : firstKeptIndex - 1);
+	return {
+		observerTokens: sourceTokensAfter(observerCoverageIndex),
+		reflectorTokens: sourceTokensAfter(reflectorCoverageIndex),
+		poolTokens,
+		compactionTokens: sourceTokensAfter(compactionCoverageIndex),
+	};
 }
 
 export function collectBlackholeStatus(ctx: ExtensionContext): BlackholeStatus | null {
@@ -167,20 +186,20 @@ export function collectBlackholeStatus(ctx: ExtensionContext): BlackholeStatus |
 		const entries = manager.getBranch.call(manager);
 		if (!Array.isArray(entries)) return null;
 		const branch = entries as BlackholeEntry[];
-		const memory = collectBlackholeMemory(branch);
+		const summary = summarizeBlackholeBranch(branch);
 		const compactAfter = positiveNumber(config.compactAfterTokens, 81_000);
 
 		return {
 			compaction: config.compaction === "manual" || config.compaction === "off" ? config.compaction : "auto",
 			compactionEngine: config.compactionEngine === "pi-default" ? "pi-default" : "blackhole",
 			memory: config.memory !== false,
-			observerTokens: sourceTokensAfter(branch, coverageIndex(branch, BLACKHOLE_OBSERVATIONS, "observations")),
+			observerTokens: summary.observerTokens,
 			observerThreshold: positiveNumber(config.observeAfterTokens, 15_000),
-			reflectorTokens: sourceTokensAfter(branch, coverageIndex(branch, BLACKHOLE_REFLECTIONS, "reflections")),
+			reflectorTokens: summary.reflectorTokens,
 			reflectorThreshold: positiveNumber(config.reflectAfterTokens, 25_000),
-			poolTokens: memory.poolTokens,
+			poolTokens: summary.poolTokens,
 			poolThreshold: positiveNumber(config.observationsPoolMaxTokens, 20_000),
-			compactionTokens: blackholeCompactionTokens(branch),
+			compactionTokens: summary.compactionTokens,
 			compactionThreshold: compactAfter,
 			cooldowns: readBlackholeCooldowns(),
 		};
