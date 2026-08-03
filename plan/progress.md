@@ -63,3 +63,9 @@
 - `src/message-borders.ts` 现在复用 Sakura 用户消息结构；工具调用才使用工具卡片边框，Bash 只重绘 Pi 原有上下边框。
 - `npm run typecheck`、`npm run pack:check`、`npm audit --omit=dev`、RPC 加载：通过。
 - 已重新安装 `pi-jielumoon-tui`。
+
+## 2026-08-03：还原 Sakura 用户消息样式
+- 用户消息左侧 rail 改回 Sakura 默认粗 glyph `▐`，不再使用细线 `│`。
+- 补齐 Sakura 的 macaron Markdown 主题映射：标题、链接、代码、引用、列表和文本强调。
+- `npm run typecheck`、`npm run pack:check`、`npm audit --omit=dev`、RPC 加载：通过。
+- 已重新安装 `pi-jielumoon-tui`。

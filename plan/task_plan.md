@@ -70,6 +70,12 @@ Complete
 - [x] 实现、验证并重新安装
 - **Status:** complete
 
+### Phase 11: 还原 Sakura 用户消息样式
+- [x] 使用 Sakura 默认粗 rail `▐` 替代细线 rail
+- [x] 迁移完整 macaron Markdown 主题映射
+- [x] 类型检查、打包检查、审计并重新安装
+- **Status:** complete
+
 ## Decisions Made
 | Decision | Rationale |
 |----------|-----------|

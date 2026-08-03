@@ -1,6 +1,5 @@
 import {
 	BashExecutionComponent,
-	getMarkdownTheme as getDefaultMarkdownTheme,
 	ToolExecutionComponent,
 	UserMessageComponent,
 	type ExtensionAPI,
@@ -32,7 +31,6 @@ type ToolRuntime = {
 
 type PatchableUserMessage = {
 	text?: string;
-	markdownTheme?: MarkdownTheme;
 };
 
 const MIN_BORDER_WIDTH = 8;
@@ -79,8 +77,27 @@ function themeFg(theme: Theme | undefined, color: ThemeColor, text: string): str
 	}
 }
 
+function makeUserMarkdownTheme(theme: Theme | undefined): MarkdownTheme {
+	return {
+		heading: (text) => themeFg(theme, "mdHeading", text),
+		link: (text) => themeFg(theme, "mdLink", text),
+		linkUrl: (text) => themeFg(theme, "mdLinkUrl", text),
+		code: (text) => themeFg(theme, "mdCode", text),
+		codeBlock: (text) => themeFg(theme, "mdCodeBlock", text),
+		codeBlockBorder: (text) => themeFg(theme, "mdCodeBlockBorder", text),
+		quote: (text) => themeFg(theme, "mdQuote", text),
+		quoteBorder: (text) => themeFg(theme, "mdQuoteBorder", text),
+		hr: (text) => themeFg(theme, "mdHr", text),
+		listBullet: (text) => themeFg(theme, "mdListBullet", text),
+		bold: (text) => (theme ? theme.bold(text) : text),
+		italic: (text) => (theme ? theme.italic(text) : text),
+		underline: (text) => (theme ? theme.underline(text) : text),
+		strikethrough: (text) => (theme ? theme.strikethrough(text) : text),
+	};
+}
+
 function renderUserLine(line: string, width: number): string {
-	const rail = `${renderSakuraSolid("│")} `;
+	const rail = `${renderSakuraSolid("▐")} `;
 	const contentWidth = Math.max(0, width - visibleWidth(rail));
 	return truncateToWidth(`${rail}${fitInnerLine(line, contentWidth)}`, width, "");
 }
@@ -102,13 +119,13 @@ function renderSakuraUserMessage(
 	const text = receiver.text;
 	if (typeof text !== "string" || width < MIN_BORDER_WIDTH) return undefined;
 
-	const rail = `${renderSakuraSolid("│")} `;
+	const rail = `${renderSakuraSolid("▐")} `;
 	const contentWidth = Math.max(1, width - visibleWidth(rail));
 	const renderer = new Markdown(
 		text,
 		0,
 		0,
-		receiver.markdownTheme ?? getDefaultMarkdownTheme(),
+		makeUserMarkdownTheme(theme),
 		{ color: (content) => themeFg(theme, "userMessageText", content) },
 	);
 	const rendered = renderer.render(contentWidth);
