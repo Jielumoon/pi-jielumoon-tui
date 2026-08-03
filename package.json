@@ -38,6 +38,7 @@
       "./src/nano-context.ts",
       "./src/vibrant-footer.ts",
       "./src/thinking.ts",
+      "./src/message-borders.ts",
       "./node_modules/@narumitw/pi-usage/src/index.ts"
     ]
   },

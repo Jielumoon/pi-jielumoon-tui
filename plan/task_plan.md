@@ -64,6 +64,12 @@ Complete
 - [x] 类型检查、打包检查、审计并重新安装
 - **Status:** complete
 
+### Phase 10: 增加消息边框
+- [x] 确认用户消息独立、助手回复含 Thought trail、工具调用保持独立
+- [x] 设计与 Thought trail/工具调用兼容的消息卡片
+- [x] 实现、验证并重新安装
+- **Status:** complete
+
 ## Decisions Made
 | Decision | Rationale |
 |----------|-----------|

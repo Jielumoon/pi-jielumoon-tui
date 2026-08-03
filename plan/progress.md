@@ -52,3 +52,14 @@
 - 修改 `src/thinking-message.ts`：所有 Thought trail 正文统一经过 `softBody()`，只保留树枝与菱形的渐变色。
 - `npm run typecheck`、`npm run pack:check`、`npm audit --omit=dev`：通过。
 - 已重新安装 `pi-jielumoon-tui`。
+
+## 2026-08-03：调研消息边框
+- 当前 `pi-jielumoon-tui` 只改造 Footer 和 Thought trail，用户消息与助手回复仍使用 Pi 默认无边框渲染。
+- Sakura 的 `user-message.ts` 通过 patch `UserMessageComponent.render()` 绘制顶部/底部渐变横线和左侧 rail；Pi 原生 `AssistantMessageComponent` 没有对应的完整消息卡片。
+- 新增 Phase 10，待确认助手边框是否包含 Thought trail、工具调用后再实现，避免错误包住整段执行输出。
+
+## 2026-08-03：修正消息边框分层
+- 上一版错误地把助手回复和 Thought trail 一起包进边框，已移除该逻辑。
+- `src/message-borders.ts` 现在复用 Sakura 用户消息结构；工具调用才使用工具卡片边框，Bash 只重绘 Pi 原有上下边框。
+- `npm run typecheck`、`npm run pack:check`、`npm audit --omit=dev`、RPC 加载：通过。
+- 已重新安装 `pi-jielumoon-tui`。
