@@ -98,6 +98,7 @@ export type FooterSettings = {
 	model: boolean;
 	thinking: boolean;
 	blackhole: boolean;
+	planning: boolean;
 	extensions: boolean;
 };
 
@@ -119,6 +120,7 @@ export const DEFAULT_FOOTER_SETTINGS: FooterSettings = {
 	thinking: true,
 	blackhole: true,
 	extensions: true,
+	planning: true,
 };
 
 export const FOOTER_SETTING_DEFINITIONS: readonly FooterSettingDefinition[] = [
@@ -133,6 +135,7 @@ export const FOOTER_SETTING_DEFINITIONS: readonly FooterSettingDefinition[] = [
 	{ key: "thinking", label: "Thinking level", aliases: ["thinking"] },
 	{ key: "blackhole", label: "Blackhole（O/R/P/C）", aliases: ["blackhole", "bh"] },
 	{ key: "extensions", label: "扩展状态（usage）", aliases: ["extensions", "extension", "status", "usage"] },
+	{ key: "planning", label: "计划阶段状态", aliases: ["planning", "plan", "phases"] },
 ];
 
 export type BlackholeEntry = {

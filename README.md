@@ -29,6 +29,7 @@ pi install /home/jielumoon/opt/projects/pi-tui/pi-jielumoon
 /jielumoon-tui on            开启 Footer
 /jielumoon-tui off           恢复 Pi 默认 Footer
 /jielumoon-tui reset         恢复 Footer 默认显示项
+/jielumoon-tui planning on/off  开启/关闭右侧计划阶段状态
 ```
 
 ## 开发

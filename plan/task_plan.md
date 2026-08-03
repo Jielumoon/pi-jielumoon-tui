@@ -76,6 +76,13 @@ Complete
 - [x] 类型检查、打包检查、审计并重新安装
 - **Status:** complete
 
+### Phase 12: 增加计划状态显示开关
+- [x] 新增独立 `planning` Footer 设置项，默认开启
+- [x] 设置面板和 `/jielumoon-tui planning on/off` 可切换
+- [x] 关闭时只隐藏 `planning-with-files` 状态，不影响其它扩展状态
+- [x] 类型检查、打包检查、审计并重新安装
+- **Status:** complete
+
 ## Decisions Made
 | Decision | Rationale |
 |----------|-----------|

@@ -69,3 +69,10 @@
 - 补齐 Sakura 的 macaron Markdown 主题映射：标题、链接、代码、引用、列表和文本强调。
 - `npm run typecheck`、`npm run pack:check`、`npm audit --omit=dev`、RPC 加载：通过。
 - 已重新安装 `pi-jielumoon-tui`。
+
+## 2026-08-03：计划状态显示开关
+- 新增独立 Footer 设置项 `planning`，默认开启，设置面板显示为“计划阶段状态”。
+- 关闭时只过滤 `planning-with-files` 的 `9/9 phases complete`，其它扩展状态和 usage 不受影响。
+- 支持 `/jielumoon-tui planning on`、`/jielumoon-tui planning off`，配置持久化到现有 Footer 设置文件。
+- `npm run typecheck`、`npm run pack:check`、`npm audit --omit=dev`、RPC 加载：通过。
+- 已重新安装 `pi-jielumoon-tui`。

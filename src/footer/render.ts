@@ -169,7 +169,8 @@ function renderExtensionStatusLine(
 	theme: FooterTheme,
 	statuses: ReadonlyMap<string, string>,
 	width: number,
- ): string | null {
+	showPlanning: boolean,
+): string | null {
 	const entries = Array.from(statuses.entries())
 		.map(([key, text]) => [key, text.replace(/[\r\n\t]/g, " ").replace(/ +/g, " ").trim()] as const)
 		.filter(([, text]) => Boolean(text));
@@ -181,9 +182,9 @@ function renderExtensionStatusLine(
 		.sort(([leftKey], [rightKey]) => leftKey.localeCompare(rightKey))
 		.map(([, text]) => text)
 		.join(separator);
-	const planning = entries.find(([key]) => key === PLANNING_STATUS_KEY)?.[1];
+	const planning = showPlanning ? entries.find(([key]) => key === PLANNING_STATUS_KEY)?.[1] : undefined;
 
-	if (!planning) return truncateToWidth(left, width, theme.fg("dim", "…"));
+	if (!planning) return left ? truncateToWidth(left, width, theme.fg("dim", "…")) : null;
 
 	const right = truncateToWidth(planning, width, theme.fg("dim", "…"));
 	const rightWidth = visibleWidth(right);
@@ -211,7 +212,7 @@ export function renderFooter(
 		lines.push(renderBlackholeLine(theme, snapshot.blackhole, icons, width));
 	}
 	if (settings.extensions) {
-		const statusLine = renderExtensionStatusLine(theme, renderData.extensionStatuses, width);
+		const statusLine = renderExtensionStatusLine(theme, renderData.extensionStatuses, width, settings.planning);
 		if (statusLine) lines.push(statusLine);
 	}
 
