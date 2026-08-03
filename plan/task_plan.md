@@ -1,7 +1,7 @@
 # pi-jielumoon-tui 修订计划
 
 ## Goal
-完整继承 `pi-vibrant-footer` 的功能，只额外加入 sakura 风格的 Thought trail 思维链显示。
+完整继承 `pi-vibrant-footer` 的功能，加入 sakura 风格的 Thought trail，并迁移用户点名的 pi-ui 工作状态 Shimmer。
 
 ## Current Phase
 Complete
@@ -17,10 +17,10 @@ Complete
 - [x] 保留 `├─ ◇` / `╰─ ◇` 树形结构
 - **Status:** complete
 
-### Phase 3: 删除无关 UI
-- [x] 删除自定义 editor
-- [x] 删除自定义 Working 动画
-- [x] 删除自定义工具 rail
+### Phase 3: 删除初版无关 UI
+- [x] 删除初版自定义 editor
+- [x] 删除初版自定义 Working 动画
+- [x] 删除初版自定义工具 rail
 - **Status:** complete
 
 ### Phase 4: 验证和安装
@@ -112,11 +112,36 @@ Complete
 - [x] 类型检查、打包检查、审计、RPC 加载、定向行为验证并重新安装
 - **Status:** complete
 
+### Phase 17: 迁移 pi-ui 工作状态 Shimmer
+- [x] 迁移移动彩虹渐变与实时耗时的 `⠦ Working (Ns · esc to interrupt)`
+- [x] 让 retry countdown 与 context compaction 复用同一渐变并保留状态文案
+- [x] agent settled 后追加持久的 `Worked for Ns` transcript 行
+- [x] 类型检查、打包检查、RPC 加载并重新安装
+- **Status:** complete
+### Phase 18: 修正工作状态视觉
+- [x] 使用 Thought trail 的 Sakura macaron 色板替换彩虹色板
+- [x] 恢复 Pi 原生 Braille 转圈帧，不固定使用单帧 `⠦`
+- [x] 类型检查、定向行为验证、打包检查、RPC 加载并重新安装
+- **Status:** complete
+
+### Phase 19: 对齐耗时行并放慢渐变
+- [x] 给 `Worked for Ns` 增加两个前导空格，与 `✦ Thought trail` 对齐
+- [x] 将 macaron 渐变周期放慢到约 2.8 秒，保留 Braille spinner 独立转动
+- [x] 类型检查、定向行为验证、打包检查、RPC 加载并重新安装
+- **Status:** complete
+
+### Phase 20: 重写 README 并发布项目
+- [x] 重写安装、功能、命令、开发和兼容性说明
+- [x] 配置 `origin` 为 `https://github.com/Jielumoon/pi-jielumoon-tui.git`
+- [ ] 通过验证后提交并覆盖远程 `master`
+- **Status:** in_progress
+
+
 ## Decisions Made
 | Decision | Rationale |
 |----------|-----------|
 | 以 `pi-vibrant-footer` 为唯一功能基线 | 先保证已有 Footer 功能完整，不重新发明数据和设置系统 |
-| 只迁移 Thought trail | 用户明确不需要额外 editor、Working 和工具视觉 |
+| 只迁移 Thought trail 与用户明确点名的工作状态 Shimmer | 不接管 editor、工具视觉等未提出的 UI；工作状态复用 Pi 的公开 UI API |
 | Pi 核心包只放 peerDependencies | 由宿主 Pi 提供，避免把宿主依赖和审计风险打进包 |
 
 ## Errors Encountered

@@ -31,3 +31,8 @@
 ## 错误记录
 - 第一次复制 sakura 文件使用了错误路径 `/home/jielumoon/opt/projects/pi-sakura-cyberdeck`；正确路径为 `/home/jielumoon/opt/projects/pi-tui/pi-sakura-cyberdeck`，随后已改用正确路径。
 - 调整 peer 依赖布局后，本地 `node_modules/.bin/pi` 被清理；改用系统 Pi 验证扩展加载，未修改包运行时依赖边界。
+
+## pi-ui 工作状态 Shimmer 调研
+- `pi-ui/src/working.ts` 使用 `setWorkingIndicator()` 配置单色 `·`，再用 `setWorkingMessage()` 每 90ms 更新彩虹渐变文案和耗时。
+- retry/compaction 没有走 working indicator 配置，因此 pi-ui patch `Loader.prototype.updateDisplay`，只对 `kind=retry/compaction` 或对应状态文案做渐变，避免改变 Bash loader 与其它 Pi loader。
+- 结束时通过 `appendEntry("pi-ui-elapsed", { elapsedMs })` 持久化，再用 `registerEntryRenderer` 渲染 `Worked for Ns`；本项目不迁移 pi-ui 的 todo 镜像逻辑。

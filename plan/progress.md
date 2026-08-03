@@ -103,3 +103,17 @@
 - 工具缓存增加 `updateDisplay` revision 失效；恢复工具、Bash 和隐藏思考渲染结果的字符串数组边界校验。
 - 类型检查、打包检查、依赖审计、RPC 加载及 Blackhole 实时重算、usage 增量、context 事件复用、工具缓存失效四项定向验证均通过。
 - 已重新安装 `pi-jielumoon-tui`。
+
+## 2026-08-03：修正工作状态视觉
+- 用户澄清 `⠦` 只是 Pi 原生 Braille 转圈动画的一帧，不应固定显示；工作行恢复 `⠋ ⠙ ⠹ ⠸ ⠼ ⠴ ⠦ ⠧ ⠇ ⠏` 帧序列。
+- 工作文案和 retry/context compaction 改为直接复用 `src/gradient.ts` 的 `renderSakuraGradient`，与 `✦ Thought trail` 使用同一组 Sakura macaron 色板。
+- 定向 working probe 验证原生帧序列、macaron 配色、retry、compaction 和 transcript；类型检查、打包检查、依赖审计、RPC 扩展加载、安装均通过。
+
+## 2026-08-03：对齐耗时行并放慢渐变
+- `Worked for Ns` 增加两个前导空格，与 `✦ Thought trail` 的左侧空白对齐。
+- macaron 渐变改为约 2.8 秒一个周期；工作文案每 180ms 更新，Braille spinner 仍按 Pi 原生 80ms 帧序列独立转动。
+- 定向 probe、类型检查、打包检查、依赖审计、RPC 扩展加载和重新安装均通过。
+
+## 2026-08-03：重写 README 并准备发布
+- README 重写为完整的中文项目说明，覆盖特性、安装、本地开发、命令、配置持久化、扩展入口和兼容性。
+- 已配置 GitHub 远程 `origin`；远程已有独立 `master` 历史，待验证后用本地项目内容覆盖。

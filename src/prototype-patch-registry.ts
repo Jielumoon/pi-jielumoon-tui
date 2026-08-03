@@ -10,7 +10,8 @@ type PrototypePatchAdapter =
 	| "bash-execution-render"
 	| "bash-execution-invalidate"
 	| "assistant-thinking-content"
-	| "assistant-thinking-hidden-render";
+	| "assistant-thinking-hidden-render"
+	| "loader-status-update"
 
 type PrototypeMethodName = "render" | "invalidate" | "updateContent" | "updateDisplay";
 type PrototypeMethod = (this: unknown, ...args: unknown[]) => unknown;

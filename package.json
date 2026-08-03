@@ -39,6 +39,7 @@
       "./src/vibrant-footer.ts",
       "./src/thinking.ts",
       "./src/message-borders.ts",
+      "./src/working.ts",
       "./node_modules/@narumitw/pi-usage/src/index.ts"
     ]
   },
