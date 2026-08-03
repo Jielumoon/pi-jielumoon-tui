@@ -27,11 +27,31 @@ type ToolRuntime = {
 	};
 	toolName?: string;
 	hideComponent?: boolean;
+	expanded?: boolean;
+	showImages?: boolean;
 };
 
 type PatchableUserMessage = {
 	text?: string;
 };
+
+type UserMessageRenderCache = {
+	text: string;
+	width: number;
+	theme: Theme | undefined;
+	lines: RenderedLines;
+};
+
+type ToolRenderCache = {
+	width: number;
+	result: ToolRuntime["result"];
+	expanded: boolean;
+	showImages: boolean;
+	lines: RenderedLines;
+};
+
+const userMessageRenderCache = new WeakMap<object, UserMessageRenderCache>();
+const toolRenderCache = new WeakMap<object, ToolRenderCache>();
 
 const MIN_BORDER_WIDTH = 8;
 const OSC133_ZONE_START = "\x1b]133;A\x07";
@@ -43,6 +63,10 @@ const RAIL_ERROR = [255, 143, 163] as const;
 
 function isRenderedLines(value: unknown): value is RenderedLines {
 	return Array.isArray(value) && value.every((line) => typeof line === "string");
+}
+
+function isObject(value: unknown): value is object {
+	return (typeof value === "object" && value !== null) || typeof value === "function";
 }
 
 function stripAnsi(line: string): string {
@@ -119,6 +143,9 @@ function renderSakuraUserMessage(
 	const text = receiver.text;
 	if (typeof text !== "string" || width < MIN_BORDER_WIDTH) return undefined;
 
+	const cached = userMessageRenderCache.get(receiver as object);
+	if (cached?.text === text && cached.width === width && cached.theme === theme) return cached.lines;
+
 	const rail = `${renderSakuraSolid("▐")} `;
 	const contentWidth = Math.max(1, width - visibleWidth(rail));
 	const renderer = new Markdown(
@@ -138,7 +165,9 @@ function renderSakuraUserMessage(
 		renderUserLine("", width),
 		border,
 	];
-	return withPromptZoneMarkers(lines);
+	const markedLines = withPromptZoneMarkers(lines);
+	userMessageRenderCache.set(receiver as object, { text, width, theme, lines: markedLines });
+	return markedLines;
 }
 
 function toolName(runtime: ToolRuntime): string {
@@ -260,15 +289,69 @@ export function installMessageBorders(getTheme: () => Theme | undefined): Cleanu
 		},
 	);
 
+	const cleanupUserInvalidate = installPrototypePatch(
+		UserMessageComponent.prototype,
+		"invalidate",
+		"user-message-invalidate",
+		({ predecessor, receiver, args }) => {
+			if (isObject(receiver)) userMessageRenderCache.delete(receiver);
+			return Reflect.apply(predecessor, receiver, args);
+		},
+	);
+
 	const cleanupToolMessage = installPrototypePatch(
 		ToolExecutionComponent.prototype,
 		"render",
 		"tool-execution-render",
 		({ predecessor, receiver, args }) => {
-			const rendered = Reflect.apply(predecessor, receiver, args);
+			const runtime = receiver as ToolRuntime;
 			const width = args[0];
+			if (
+				typeof width === "number" &&
+				isObject(receiver) &&
+				runtime.isPartial === false &&
+				!runtime.hideComponent &&
+				!containsResultImage(runtime)
+			) {
+				const cached = toolRenderCache.get(receiver);
+				if (
+					cached?.width === width &&
+					cached.result === runtime.result &&
+					cached.expanded === Boolean(runtime.expanded) &&
+					cached.showImages === Boolean(runtime.showImages)
+				) {
+					return cached.lines;
+				}
+			}
+
+			const rendered = Reflect.apply(predecessor, receiver, args);
 			if (!isRenderedLines(rendered) || typeof width !== "number") return rendered;
-			return frameToolMessage(rendered, width, receiver as ToolRuntime);
+			const framed = frameToolMessage(rendered, width, runtime);
+			if (
+				isObject(receiver) &&
+				runtime.isPartial === false &&
+				!runtime.hideComponent &&
+				!containsResultImage(runtime)
+			) {
+				toolRenderCache.set(receiver, {
+					width,
+					result: runtime.result,
+					expanded: Boolean(runtime.expanded),
+					showImages: Boolean(runtime.showImages),
+					lines: framed,
+				});
+			}
+			return framed;
+		},
+	);
+
+	const cleanupToolInvalidate = installPrototypePatch(
+		ToolExecutionComponent.prototype,
+		"invalidate",
+		"tool-execution-invalidate",
+		({ predecessor, receiver, args }) => {
+			if (isObject(receiver)) toolRenderCache.delete(receiver);
+			return Reflect.apply(predecessor, receiver, args);
 		},
 	);
 
@@ -289,7 +372,9 @@ export function installMessageBorders(getTheme: () => Theme | undefined): Cleanu
 		if (cleaned) return;
 		cleaned = true;
 		cleanupBashMessage();
+		cleanupToolInvalidate();
 		cleanupToolMessage();
+		cleanupUserInvalidate();
 		cleanupUserMessage();
 	};
 }

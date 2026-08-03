@@ -76,3 +76,9 @@
 - 支持 `/jielumoon-tui planning on`、`/jielumoon-tui planning off`，配置持久化到现有 Footer 设置文件。
 - `npm run typecheck`、`npm run pack:check`、`npm audit --omit=dev`、RPC 加载：通过。
 - 已重新安装 `pi-jielumoon-tui`。
+
+## 2026-08-03：优化消息渲染性能
+- 原因：消息边框扩展在每次 TUI 重绘时重复渲染所有历史用户 Markdown 和已完成工具边框，消息增多后复杂度持续放大。
+- `src/message-borders.ts` 新增用户消息缓存、已完成工具缓存，以及 `invalidate` 失效清理；流式工具不缓存，保持实时输出。
+- `npm run typecheck`、`npm run pack:check`、`npm audit --omit=dev`、RPC 加载：通过。
+- 已重新安装 `pi-jielumoon-tui`。

@@ -11,3 +11,5 @@
 2026-08-03 06:10---用户纠正消息边框应只用于用户消息和工具调用，并反馈用户边框视觉不佳---移除助手回复/Thought trail 的边框，复用 Sakura 用户消息的粗 `▐` rail 与完整 macaron Markdown 主题，为 ToolExecution/BashExecution 增加 Sakura 工具卡片边框---修改 `package.json`、`src/message-borders.ts`、`src/prototype-patch-registry.ts`、`plan/task_plan.md`、`plan/progress.md`；类型检查、打包检查、依赖审计、RPC 加载和重新安装均通过。
 
 2026-08-03 06:20---用户要求 `9/9 phases complete` 可在设置中开关---在 `FooterSettings` 增加 `planning` 字段，过滤 `planning-with-files` 状态并接入设置面板与命令---修改 `src/footer/types.ts`、`src/footer/render.ts`、`README.md`、`plan/task_plan.md`、`plan/progress.md`；类型检查、打包检查、依赖审计、RPC 加载和重新安装均通过。
+
+2026-08-03 06:30---消息增多后 TUI 出现卡顿---消息边框扩展每次重绘都重复计算历史用户 Markdown 与已完成工具边框---修改 `src/message-borders.ts`，增加用户消息/已完成工具缓存和 invalidate 清理；流式工具保持实时渲染；类型检查、打包检查、依赖审计、RPC 加载和重新安装均通过。

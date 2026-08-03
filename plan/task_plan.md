@@ -83,6 +83,13 @@ Complete
 - [x] 类型检查、打包检查、审计并重新安装
 - **Status:** complete
 
+### Phase 13: 优化消息渲染性能
+- [x] 缓存历史用户消息 Markdown 和边框结果
+- [x] 缓存已完成工具调用，保留流式工具实时刷新
+- [x] 增加消息/工具失效缓存清理
+- [x] 类型检查、打包检查、审计并重新安装
+- **Status:** complete
+
 ## Decisions Made
 | Decision | Rationale |
 |----------|-----------|
