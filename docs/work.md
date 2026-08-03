@@ -25,3 +25,5 @@
 2026-08-03 08:30---用户要求 `Worked for Ns` 与 `✦ Thought trail` 对齐并放慢渐变---给 transcript 文案增加两个前导空格；将 macaron shimmer 周期设为约 2.8 秒，工作文案 180ms 更新，spinner 保持原生 80ms 转动---修改 `src/working.ts`、`plan/*`；定向 probe、类型检查、打包检查、依赖审计、RPC 加载和安装均通过。
 
 2026-08-03 08:40---用户要求重写 README 并上传到 GitHub---重写完整中文 README，补充特性、安装、命令、配置、开发、扩展入口和兼容性说明；先配置 HTTPS 远程，因当前环境无 HTTPS 凭据改用已验证的 SSH 认证---修改 `README.md`、`plan/*`，将 `origin` 切换为 `git@github.com:Jielumoon/pi-jielumoon-tui.git`；类型检查、打包检查、依赖审计、RPC 加载均通过，并以 `--force-with-lease` 覆盖远程 `master`，远程提交为 `a21932f`。
+
+2026-08-03 09:00---用户发现 Working 与结束后的上下文彩条分布跳变---确认 Pi 的 `context.messages` 是完整请求上下文，而 `agent_end.messages` 仅为本次 agent run 新增消息；结束后不能将后者拿来重算角色比例---修改 `src/nano-context.ts`，在 `agent_end` 复用最后一次完整 context 快照并更新最新 usage 总量；类型检查、打包检查、依赖审计、事件语义检查和 RPC 加载均通过。

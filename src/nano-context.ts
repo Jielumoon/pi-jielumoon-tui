@@ -380,7 +380,8 @@ export default function nanoContext(pi: ExtensionAPI): void {
 	pi.on("session_start", (_event, ctx) => refreshFromSession(ctx));
 
 	pi.on("context", (event, ctx) => refreshFromMessages(ctx, event.messages));
-	pi.on("agent_end", (event, ctx) => refreshFromMessages(ctx, event.messages));
+	// Pi 的 agent_end.messages 只包含刚结束 run 的增量，不是完整模型上下文。
+	pi.on("agent_end", (_event, ctx) => refreshFromActiveMessages(ctx));
 	pi.on("model_select", (_event, ctx) => refreshFromActiveMessages(ctx));
 	pi.on("thinking_level_select", (_event, ctx) => refreshFromActiveMessages(ctx));
 	pi.on("session_compact", (_event, ctx) => refreshFromSession(ctx));
