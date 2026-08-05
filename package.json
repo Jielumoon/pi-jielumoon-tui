@@ -14,9 +14,10 @@
     "quota"
   ],
   "engines": {
-    "node": ">=18"
+    "node": ">=22.19.0"
   },
   "scripts": {
+    "test": "tsx --test tests/*.test.ts",
     "typecheck": "tsc --noEmit",
     "pack:check": "npm pack --dry-run --ignore-scripts"
   },
@@ -35,11 +36,7 @@
   ],
   "pi": {
     "extensions": [
-      "./src/nano-context.ts",
-      "./src/vibrant-footer.ts",
-      "./src/thinking.ts",
-      "./src/message-borders.ts",
-      "./src/working.ts",
+      "./src/index.ts",
       "./node_modules/@narumitw/pi-usage/src/index.ts"
     ]
   },
@@ -50,7 +47,11 @@
     "package.json"
   ],
   "devDependencies": {
+    "@earendil-works/pi-ai": "0.83.0",
+    "@earendil-works/pi-coding-agent": "0.83.0",
+    "@earendil-works/pi-tui": "0.83.0",
     "@types/node": "^26.1.2",
+    "tsx": "^4.23.7",
     "typescript": "^7.0.2"
   }
 }

@@ -2,19 +2,20 @@
 
 ## Project Structure & Module Organization
 
-这是一个 TypeScript 原生 ESM 的 Pi TUI 扩展包。`package.json` 的 `pi.extensions` 声明运行时入口：
+这是一个 TypeScript 原生 ESM 的 Pi TUI 扩展包。`package.json` 只暴露 `src/index.ts` 作为自有入口，由它统一注册以下模块：
 
 - `src/vibrant-footer.ts`：Footer 生命周期、事件刷新与快照
 - `src/footer/`：Footer 类型、渲染、设置、usage 和 Blackhole 数据
 - `src/nano-context.ts`：上下文用量组件
 - `src/thinking.ts`、`src/thinking-message.ts`：Thought trail
 - `src/message-borders.ts`：用户消息、工具和 Bash 卡片样式
+- `src/sakura-editor.ts`：Sakura 圆角输入框，保留 Pi 原生编辑行为并与其它 Editor 让位
 - `src/working.ts`：Working Shimmer、spinner 和耗时 transcript
 - `src/prototype-patch-registry.ts`：原型补丁的安装与清理
 
 ## Build, Test, and Development Commands
 
-要求 Node.js `>=18`。首次安装使用：
+要求 Node.js `>=22.19.0`，与 `@earendil-works/pi-coding-agent >=0.83.0` 的官方运行时要求一致。首次安装使用：
 
 ```bash
 npm install --legacy-peer-deps
@@ -23,12 +24,13 @@ npm install --legacy-peer-deps
 提交前至少运行：
 
 ```bash
+npm test
 npm run typecheck
 npm run pack:check
 npm audit --omit=dev
 ```
 
-项目目前没有独立测试套件。涉及 Pi 生命周期或 TUI 渲染的改动，还应使用 Pi RPC 模式加载全部扩展，或本地 `pi install` 后执行 `/reload` 手动确认。
+测试位于 `tests/`，使用 Node `assert` 和 `tsx --test`；新增行为时优先为纯格式化、聚合逻辑或 mock 后的 Pi 生命周期补回归测试。涉及真实 Pi 生命周期或 TUI 渲染的改动，仍应使用 Pi RPC 模式加载全部扩展，或本地 `pi install` 后执行 `/reload` 手动确认。
 
 ## Coding Style & Naming Conventions
 
@@ -40,4 +42,4 @@ npm audit --omit=dev
 
 ## Security & Configuration Tips
 
-不要提交令牌、账号或本地运行时配置。Footer 设置保存在 `~/.pi/agent/pi-vibrant-footer.json`，不属于仓库文件；修改依赖后必须重新执行依赖审计。不要将 `node_modules/` 或打包生成的 `.tgz` 加入版本控制。
+不要提交令牌、账号或本地运行时配置。Footer 设置保存在 `~/.pi/agent/pi-vibrant-footer.json`，不属于仓库文件；修改依赖后必须重新执行依赖审计。根目录的 `npm audit --omit=dev` 会因测试用 Pi 0.83 core 报告其 `undici` / `brace-expansion` 上游公告，禁止用 `npm audit fix --force` 降级 Pi 掩盖问题；发布前还应在隔离目录对实际 tarball 的 `--omit=dev` 生产依赖树审计。不要将 `node_modules/` 或打包生成的 `.tgz` 加入版本控制。

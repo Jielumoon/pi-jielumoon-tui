@@ -28,6 +28,12 @@
 - 工具调用与 Bash 执行使用卡片边框和状态提示
 - 助手正文与 Thought trail 保持干净的无包围框布局
 
+### Sakura 输入框
+
+- Pi 原生编辑器外包一层 Sakura macaron 圆角框
+- 保留补全、粘贴、历史、Esc 中断和全部 Pi 快捷键
+- 窄终端自动回退原生样式；发现其它扩展已接管 Editor 时自动让位
+
 ### 工作状态 Shimmer
 
 - 工作中使用 Pi 原生 Braille spinner：
@@ -37,7 +43,7 @@
 - 渐变以较慢的节奏移动，spinner 仍保持独立的原生转圈速度
 - agent 完成后追加与 Thought trail 对齐的 `Worked for Ns` transcript 行
 
-本扩展不接管 Pi 默认编辑器；工具内容仍由 Pi 原生组件负责，只增加消息卡片样式。
+输入框使用 Sakura 圆角框；工具内容仍由 Pi 原生组件负责，只增加消息卡片样式。
 
 ## 安装
 
@@ -97,27 +103,24 @@ pi -e /home/jielumoon/opt/projects/pi-tui/pi-jielumoon
 
 ## 开发
 
-要求 Node.js 18 或更高版本。
+要求 Node.js 22.19.0 或更高版本。
 
 ```bash
 npm install --legacy-peer-deps
+npm test
 npm run typecheck
 npm run pack:check
 npm audit --omit=dev
 ```
 
-扩展入口由 `package.json` 的 `pi.extensions` 声明，包含：
+扩展资源由 `package.json` 的 `pi.extensions` 声明：
 
-- `src/nano-context.ts`：上下文用量组件
-- `src/vibrant-footer.ts`：Footer 生命周期与快照刷新
-- `src/thinking.ts`：Thought trail 原型补丁
-- `src/message-borders.ts`：消息与工具卡片样式
-- `src/working.ts`：工作状态 Shimmer 与耗时 transcript
-- bundled `@narumitw/pi-usage`：扩展 usage 状态
+- `src/index.ts`：唯一自有入口，统一注册 nano-context、Footer、Thought trail、消息样式、Sakura 输入框和工作状态
+- bundled `@narumitw/pi-usage`：保持独立入口，提供 Provider usage 状态
 
 ## 兼容性
 
-- Node.js `>=18`
+- Node.js `>=22.19.0`
 - `@earendil-works/pi-coding-agent >=0.83.0`
 - `@earendil-works/pi-tui >=0.83.0`
 - `@earendil-works/pi-ai >=0.83.0`
