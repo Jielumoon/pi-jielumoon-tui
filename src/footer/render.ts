@@ -1,6 +1,11 @@
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { blackholeMetricTone, formatBlackholeCooldowns, formatBlackholeMetric } from "./blackhole.ts";
 import {
+	formatUsageReset,
+	type SubscriptionUsageState,
+	type UsageWindow,
+} from "./subscription-usage.ts";
+import {
 	cacheTone,
 	contextTone,
 	formatCwd,
@@ -14,6 +19,7 @@ import {
 	thinkingStyle,
 } from "./format.ts";
 import type {
+	FooterColor,
 	FooterRenderData,
 	FooterSettings,
 	FooterSnapshot,
@@ -77,10 +83,84 @@ function renderBlackholeLine(
 	return `${truncateToWidth(left, leftWidth, theme.fg("dim", "…"))} ${right}`;
 }
 
+function modelIdentity(snapshot: FooterSnapshot): string | undefined {
+	return snapshot.model ? `${snapshot.model.provider}/${snapshot.model.id}` : undefined;
+}
+
+function quotaTone(remaining: number): FooterColor {
+	if (remaining <= 20) return "error";
+	if (remaining <= 50) return "warning";
+	return "success";
+}
+
+function renderQuotaWindow(
+	theme: FooterTheme,
+	window: UsageWindow,
+	now: number,
+	showReset: boolean,
+): string | null {
+	if (window.unit === "usd" && typeof window.remaining === "number") {
+		return theme.fg("dim", "余额 ") + theme.fg("success", `$${Math.max(0, window.remaining).toFixed(2)}`);
+	}
+	if (typeof window.usedPercent !== "number") return null;
+
+	const remaining = Number.isFinite(window.usedPercent) ? Math.max(0, Math.min(100, 100 - window.usedPercent)) : 0;
+	const reset = showReset ? formatUsageReset(window.resetAt, now) ?? window.resetDescription : undefined;
+	return (
+		theme.fg("dim", `${window.label} `) +
+		theme.fg(quotaTone(remaining), `${remaining.toFixed(0)}%`) +
+		(reset ? theme.fg("dim", ` ↻ ${reset}`) : "")
+	);
+}
+
+
+function renderSubscriptionUsage(
+	theme: FooterTheme,
+	snapshot: FooterSnapshot,
+	state: SubscriptionUsageState | undefined,
+	includeProviderLabel: boolean,
+	width: number,
+): string | null {
+	if (!state || state.modelIdentity !== modelIdentity(snapshot)) return null;
+	if (state.kind === "notice") {
+		const prefix = includeProviderLabel ? `${state.displayName} ` : "";
+		switch (state.notice) {
+			case "unavailable":
+				return theme.fg("dim", `${prefix}额度不可用`);
+			case "retrying":
+				return theme.fg("warning", `${prefix}额度稍后重试`);
+			case "timeout":
+				return theme.fg("warning", `${prefix}额度请求超时`);
+			case "request-failed":
+				return theme.fg("warning", `${prefix}额度暂不可用`);
+		}
+	}
+
+	const separator = softSeparator(theme);
+	const providerLabel = includeProviderLabel ? theme.fg("muted", state.usage.displayName) : null;
+	const renderWindows = (showReset: boolean, count: number): string | null => {
+		const windows = state.usage.windows
+			.map((window) => renderQuotaWindow(theme, window, snapshot.nowMs, showReset))
+			.filter((window): window is string => window !== null)
+			.slice(0, count);
+		return windows.length > 0 ? joinParts([providerLabel, ...windows], separator) : null;
+	};
+	const candidates = [
+		renderWindows(true, 2),
+		renderWindows(false, 2),
+		renderWindows(true, 1),
+		renderWindows(false, 1),
+	].filter((value): value is string => value !== null);
+	const display = candidates.find((value) => visibleWidth(value) <= width) ?? candidates.at(-1);
+	return display ? truncateToWidth(display, width, theme.fg("dim", "…")) : null;
+}
+
+
 function renderStatsLines(
 	theme: FooterTheme,
 	snapshot: FooterSnapshot,
 	settings: FooterSettings,
+	renderData: FooterRenderData,
 	icons: IconSet,
 	width: number,
 ): string[] {
@@ -127,11 +207,6 @@ function renderStatsLines(
 		segments.push(segment(theme, icons.cost, "warning", amount, "warning"));
 	}
 
-	if (settings.elapsed) {
-		const elapsed = snapshot.nowMs - snapshot.sessionStartMs;
-		if (elapsed >= 5000) segments.push(segment(theme, icons.time, "dim", formatDuration(elapsed), "dim"));
-	}
-
 	const thinking = settings.thinking && snapshot.model?.reasoning ? thinkingStyle(snapshot.thinkingLevel) : null;
 	const right = joinParts(
 		[
@@ -143,24 +218,37 @@ function renderStatsLines(
 		],
 		separator,
 	);
-
 	const rightWidth = visibleWidth(right);
 	const leftBudget = rightWidth > 0 ? Math.max(20, width - rightWidth - 2) : width;
-	const leftLines = layoutSegments(segments, separator, leftBudget);
-	if (leftLines.length === 0) return rightWidth > 0 ? [truncateToWidth(right, width, theme.fg("dim", "…"))] : [];
+	const quota = settings.extensions
+		? renderSubscriptionUsage(theme, snapshot, renderData.subscriptionUsage, !settings.provider, leftBudget)
+		: null;
+	if (quota) segments.push(quota);
 
-	const firstLeft = leftLines[0]!;
-	let first: string;
-	if (rightWidth === 0) {
-		first = firstLeft;
-	} else if (visibleWidth(firstLeft) + 2 + rightWidth <= width) {
-		first = padBetween(firstLeft, right, width);
-	} else {
-		const available = Math.max(0, width - visibleWidth(firstLeft) - 1);
-		first = firstLeft + " " + truncateToWidth(right, available, theme.fg("dim", "…"));
+	if (settings.elapsed) {
+		const elapsed = snapshot.nowMs - snapshot.sessionStartMs;
+		if (elapsed >= 5000) segments.push(segment(theme, icons.time, "dim", formatDuration(elapsed), "dim"));
 	}
 
-	return [first, ...leftLines.slice(1)];
+	const leftLines = layoutSegments(segments, separator, leftBudget);
+	const lines: string[] = [];
+
+	if (leftLines.length === 0) {
+		if (rightWidth > 0) lines.push(truncateToWidth(right, width, theme.fg("dim", "…")));
+	} else {
+		const firstLeft = leftLines[0]!;
+		if (rightWidth === 0) {
+			lines.push(firstLeft);
+		} else if (visibleWidth(firstLeft) + 2 + rightWidth <= width) {
+			lines.push(padBetween(firstLeft, right, width));
+		} else {
+			const available = Math.max(0, width - visibleWidth(firstLeft) - 1);
+			lines.push(firstLeft + " " + truncateToWidth(right, available, theme.fg("dim", "…")));
+		}
+		lines.push(...leftLines.slice(1));
+	}
+
+	return lines;
 }
 
 const PLANNING_STATUS_KEY = "planning-with-files";
@@ -207,7 +295,7 @@ export function renderFooter(
 	const lines: string[] = [];
 
 	if (settings.path) lines.push(renderPathLine(theme, snapshot, renderData, icons, width));
-	lines.push(...renderStatsLines(theme, snapshot, settings, icons, width));
+	lines.push(...renderStatsLines(theme, snapshot, settings, renderData, icons, width));
 	if (settings.blackhole && snapshot.blackhole) {
 		lines.push(renderBlackholeLine(theme, snapshot.blackhole, icons, width));
 	}

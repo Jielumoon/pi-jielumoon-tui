@@ -1,3 +1,4 @@
+import type { SubscriptionUsageState } from "./subscription-usage.ts";
 import type { ThemeColor } from "@earendil-works/pi-coding-agent";
 
 export type FooterColor = ThemeColor;
@@ -134,7 +135,7 @@ export const FOOTER_SETTING_DEFINITIONS: readonly FooterSettingDefinition[] = [
 	{ key: "model", label: "Model", aliases: ["model"] },
 	{ key: "thinking", label: "Thinking level", aliases: ["thinking"] },
 	{ key: "blackhole", label: "Blackhole（O/R/P/C）", aliases: ["blackhole", "bh"] },
-	{ key: "extensions", label: "扩展状态（usage）", aliases: ["extensions", "extension", "status", "usage"] },
+	{ key: "extensions", label: "扩展状态 / 订阅额度", aliases: ["extensions", "extension", "status", "usage"] },
 	{ key: "planning", label: "计划阶段状态", aliases: ["planning", "plan", "phases"] },
 ];
 
@@ -197,4 +198,5 @@ export type FooterSnapshot = {
 export type FooterRenderData = {
 	branch: string | null;
 	extensionStatuses: ReadonlyMap<string, string>;
+	subscriptionUsage?: SubscriptionUsageState;
 };

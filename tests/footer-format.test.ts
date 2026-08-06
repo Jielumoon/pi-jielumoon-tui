@@ -9,6 +9,7 @@ import {
 	type FooterTheme,
 	type IconSet,
 } from "../src/footer/types.ts";
+import type { SubscriptionUsageState } from "../src/footer/subscription-usage.ts";
 
 const theme: FooterTheme = {
 	fg: (_color, text) => text,
@@ -57,6 +58,27 @@ const snapshot: FooterSnapshot = {
 	blackhole: null,
 };
 
+const quotaSnapshot: FooterSnapshot = {
+	...snapshot,
+	model: { ...snapshot.model!, provider: "openai-codex", usingOAuth: true },
+};
+
+const quotaState: SubscriptionUsageState = {
+	kind: "ready",
+	modelIdentity: "openai-codex/gpt-5",
+	usage: {
+		providerId: "openai-codex",
+		displayName: "Codex",
+		capturedAt: quotaSnapshot.nowMs,
+		windows: [
+			{ label: "5h", usedPercent: 28, resetAt: new Date(quotaSnapshot.nowMs + 60 * 60 * 1000).toISOString() },
+			{ label: "7d", usedPercent: 59, resetAt: new Date(quotaSnapshot.nowMs + 4 * 24 * 60 * 60 * 1000).toISOString() },
+		],
+		metrics: [],
+		notes: [],
+	},
+};
+
 test("formatters keep compact terminal-friendly labels", () => {
 	assert.equal(formatTokens(999), "999");
 	assert.equal(formatTokens(1_200), "1.2k");
@@ -72,6 +94,38 @@ test("footer segments fit at narrow widths without overflowing", () => {
 	assert.ok(lines.every((line) => visibleWidth(line) <= 13));
 });
 
+
+test("subscription quota follows subscription cost before elapsed", () => {
+	const renderData = {
+		branch: "main",
+		extensionStatuses: new Map<string, string>(),
+		subscriptionUsage: quotaState,
+	};
+	const settings = structuredClone(DEFAULT_FOOTER_SETTINGS);
+
+	const wideLines = renderFooter(quotaSnapshot, settings, renderData, 160, theme, icons);
+	const wideMetricLine = wideLines.find((line) => line.includes("5h 72%")) ?? "";
+	assert.match(wideMetricLine, /\$ 0\.024 sub · 5h 72% ↻ 1h · 7d 41% ↻ 4d · T 1m12s/);
+	assert.ok(wideMetricLine.indexOf("5h 72%") < wideMetricLine.indexOf("openai-codex"));
+	assert.equal(visibleWidth(wideMetricLine), 160);
+
+	const mediumLines = renderFooter(quotaSnapshot, settings, renderData, 80, theme, icons);
+	const mediumQuotaLine = mediumLines.find((line) => line.includes("5h 72%")) ?? "";
+	assert.match(mediumQuotaLine, /5h 72%/);
+	assert.equal(mediumQuotaLine, mediumQuotaLine.trimStart());
+	assert.ok(mediumLines.every((line) => visibleWidth(line) <= 80));
+
+	const staleLines = renderFooter(
+		quotaSnapshot,
+		settings,
+		{ ...renderData, subscriptionUsage: { ...quotaState, modelIdentity: "anthropic/claude" } },
+		80,
+		theme,
+		icons,
+	);
+	assert.doesNotMatch(staleLines.join("\n"), /5h 72%/);
+});
+
 test("planning status stays on the right and can be hidden", () => {
 	const settings = structuredClone(DEFAULT_FOOTER_SETTINGS);
 	const renderData = {
@@ -85,6 +139,7 @@ test("planning status stays on the right and can be hidden", () => {
 	const statusLine = lines.at(-1) ?? "";
 
 	assert.ok(statusLine.endsWith("7/7 phases complete"));
+	assert.match(statusLine, /usage ready/);
 	assert.equal(visibleWidth(statusLine), 80);
 	assert.ok(lines.every((line) => visibleWidth(line) <= 80));
 

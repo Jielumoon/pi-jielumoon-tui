@@ -43,3 +43,11 @@
 
 
 2026-08-06 --- 用户确认接管 ls --- 新增 ls 路径/`glob`/`limit` 调用行、目录/文件类型标记、折叠前 12 项预览、展开列表、空目录、截断和错误状态；保留原 execute 与结果数据 --- 修改 src/readmap-renderers.ts、tests/readmap-renderers.test.ts、handoff/readmap-renderer.md、plan/2026-08-06-readmap-renderer/*、docs/work.md；24 项测试、类型检查、打包检查和 diff 空白检查通过。
+
+2026-08-06 --- 用户指定自研 Codex、Anthropic、OpenRouter、xAI/Grok 用量 --- 新增本地订阅用量 Provider、官方域名校验、OAuth/API key 认证解析、60 秒缓存与退避、Footer usage 状态和 `/usage` 命令；移除 `@narumitw/pi-usage` 及其 UI 依赖，保留会话 token/cost 统计 --- 修改 src/footer/subscription-usage.ts、src/index.ts、package.json、package-lock.json、README.md、tests/package.test.ts、tests/subscription-usage.test.ts、plan/*
+
+2026-08-06 --- 用户反馈订阅额度位于左侧扩展状态行太丑、右侧留白 --- 将额度从通用 status 文本改为结构化 `SubscriptionUsageSource`，直接供 Footer 右侧模型区渲染；宽屏与 Provider/Model 同列，空间不足时右对齐独立行，窄屏省略重置时间；统一重置文案为 `↻ 1h` 并保留有效缓存以避免 429 闪烁 --- 修改 src/footer/subscription-usage.ts、src/footer/render.ts、src/footer/types.ts、src/vibrant-footer.ts、src/index.ts、tests/footer-format.test.ts、tests/subscription-usage.test.ts、README.md、plan/*、docs/work.md；33 项测试和类型检查通过。
+
+2026-08-06 --- 用户目视确认额度放在右侧模型区仍不妥且 `1w` 丑 --- 将结构化额度从右侧 metadata 改为左侧 session metrics 的 `cost/sub` 后一段、elapsed 前一段；窗口标签统一使用 `7d`；删除右对齐换行分支，保持数据流简单 --- 修改 src/footer/render.ts、src/footer/subscription-usage.ts、tests/footer-format.test.ts、tests/subscription-usage.test.ts、README.md、plan/*、docs/work.md；33 项测试和类型检查通过。
+
+2026-08-06 --- 用户要求全修本轮与 `b46acae` 审查问题 --- 在 readmap 的调用参数、工具结果、diff、ls 条目等外部文本边界移除终端控制序列，阻断 OSC/CSI 注入；429 在已有缓存时保持 ready 状态；四家 Provider 的周标签统一为 `7d`；`/usage` 失败时给出提示；删除遗留 status formatter 和重复时间分支 --- 修改 src/readmap-renderers.ts、src/footer/subscription-usage.ts、tests/readmap-renderers.test.ts、tests/subscription-usage.test.ts、plan/*、docs/work.md；35 项测试、类型检查、打包检查、生产依赖审计和 diff 空白检查通过。

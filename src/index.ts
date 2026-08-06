@@ -6,11 +6,13 @@ import installFooter from "./vibrant-footer.ts";
 import installWorking from "./working.ts";
 import installSakuraEditor from "./sakura-editor.ts";
 import installReadmapRenderers from "./readmap-renderers.ts";
+import installSubscriptionUsage from "./footer/subscription-usage.ts";
 
 /** 注册 Jielumoon TUI 的全部自有功能。 */
 export default function jielumoonTui(pi: ExtensionAPI): void {
 	installNanoContext(pi);
-	installFooter(pi);
+	const subscriptionUsage = installSubscriptionUsage(pi);
+	installFooter(pi, subscriptionUsage);
 	installThinking(pi);
 	installMessageBorders(pi);
 	installWorking(pi);

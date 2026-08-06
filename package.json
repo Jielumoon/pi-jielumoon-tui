@@ -26,18 +26,9 @@
     "@earendil-works/pi-coding-agent": ">=0.83.0",
     "@earendil-works/pi-tui": ">=0.83.0"
   },
-  "dependencies": {
-    "@narumitw/pi-tui-kit": "^0.41.0",
-    "@narumitw/pi-usage": "0.43.0"
-  },
-  "bundledDependencies": [
-    "@narumitw/pi-tui-kit",
-    "@narumitw/pi-usage"
-  ],
   "pi": {
     "extensions": [
-      "./src/index.ts",
-      "./node_modules/@narumitw/pi-usage/src/index.ts"
+      "./src/index.ts"
     ]
   },
   "files": [

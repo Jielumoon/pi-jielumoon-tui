@@ -396,6 +396,52 @@ test("bash short output shows body when collapsed; long output previews", () => 
 });
 
 
+test("readmap removes terminal control sequences from tool inputs and outputs", () => {
+	const malicious = "\x1b]52;c;YQ==\x07visible\x1b[2J";
+	const bash = makeTool("bash");
+	patchReadmapTool(bash);
+	const bashResult = bash.renderResult?.(
+		{ content: [{ type: "text", text: malicious }] },
+		{ expanded: false },
+		theme,
+		{ expanded: false, width: 80 },
+	) as { render: (w: number) => string[] };
+	const bashText = bashResult.render(80).join("\n");
+	assert.doesNotMatch(bashText, /\x1b/);
+	assert.match(bashText, /visible/);
+
+	const read = makeTool("read");
+	patchReadmapTool(read);
+	const readCall = read.renderCall?.(
+		{ path: `src/${malicious}.ts` },
+		theme,
+		{ cwd: "/tmp", width: 80 },
+	) as { render: (w: number) => string[] };
+	assert.doesNotMatch(readCall.render(80).join("\n"), /\x1b/);
+
+	const edit = makeTool("edit");
+	patchReadmapTool(edit);
+	const editResult = edit.renderResult?.(
+		{
+			content: [{ type: "text", text: "Edited" }],
+			details: {
+				diffData: {
+					version: 1,
+					stats: { added: 1, removed: 0, context: 0 },
+					entries: [{ kind: "add", newLine: 1, text: malicious }],
+				},
+			},
+		},
+		{ expanded: true },
+		theme,
+		{ expanded: true, width: 80 },
+	) as { render: (w: number) => string[] };
+	const editText = editResult.render(80).join("\n");
+	assert.doesNotMatch(editText, /\x1b/);
+	assert.match(editText, /visible/);
+});
+
+
 test("ls renderer shows path, typed entries, truncation, empty and error states", () => {
 	const tool = makeTool("ls");
 	patchReadmapTool(tool);

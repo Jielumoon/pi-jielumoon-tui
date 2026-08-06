@@ -138,6 +138,65 @@ export function clampLines(lines: readonly string[], width: number | undefined):
 	return lines.map((line) => clampLine(line, width));
 }
 
+/**
+ * 工具参数和结果来自文件、命令或模型，不能让它们携带控制终端的转义序列。
+ * 保留换行，制表符规范为空格；主题 ANSI 只会在此函数之后由本扩展生成。
+ */
+function sanitizeTerminalText(value: string): string {
+	let safe = "";
+	for (let index = 0; index < value.length; index++) {
+		const code = value.charCodeAt(index);
+		if (code === 0x1b) {
+			const kind = value[index + 1];
+			if (kind === "]") {
+				index += 2;
+				while (index < value.length) {
+					if (value.charCodeAt(index) === 0x07) break;
+					if (value.charCodeAt(index) === 0x1b && value[index + 1] === "\\") {
+						index++;
+						break;
+					}
+					index++;
+				}
+				continue;
+			}
+			if (kind === "[") {
+				index += 2;
+				while (index < value.length) {
+					const byte = value.charCodeAt(index);
+					if (byte >= 0x40 && byte <= 0x7e) break;
+					index++;
+				}
+				continue;
+			}
+			if (kind === "P" || kind === "X" || kind === "^" || kind === "_") {
+				index += 2;
+				while (index < value.length) {
+					if (value.charCodeAt(index) === 0x1b && value[index + 1] === "\\") {
+						index++;
+						break;
+					}
+					index++;
+				}
+				continue;
+			}
+			if (kind !== undefined) index++;
+			continue;
+		}
+		if (code === 0x0a) {
+			safe += "\n";
+			continue;
+		}
+		if (code === 0x09) {
+			safe += " ";
+			continue;
+		}
+		if (code <= 0x1f || (code >= 0x7f && code <= 0x9f)) continue;
+		safe += value[index]!;
+	}
+	return safe;
+}
+
 function wrapWithHangingIndent(prefix: string, content: string, width: number): string[] {
 	const combined = prefix + content;
 	if (visibleWidth(combined) <= width) return [combined];
@@ -153,7 +212,7 @@ function wrapWithHangingIndent(prefix: string, content: string, width: number): 
 
 function wrapHashlines(text: string, width: number): string[] {
 	const out: string[] = [];
-	for (const line of text.split("\n")) {
+	for (const line of sanitizeTerminalText(text).split("\n")) {
 		const match = line.match(HASHLINE_RE);
 		if (!match) {
 			out.push(...wrapTextWithAnsi(line, width).map((part) => clampLine(part, width)));
@@ -194,8 +253,8 @@ function shortenPath(path: string, max = 48): string {
 function textOf(result: ToolResultLike): string {
 	const parts = result.content
 		?.filter((item) => item?.type === "text" && typeof item.text === "string")
-		.map((item) => item.text ?? "");
-	return parts?.join("\n") ?? "";
+		.map((item) => item.text);
+	return sanitizeTerminalText(parts?.join("\n") ?? "");
 }
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
@@ -235,7 +294,7 @@ function isDiffData(value: unknown): value is DiffData {
 }
 
 function entryText(entry: DiffEntry): string {
-	return "text" in entry ? entry.text : "";
+	return "text" in entry ? sanitizeTerminalText(entry.text) : "";
 }
 
 function entryLineNo(entry: DiffEntry): string {
@@ -388,8 +447,8 @@ function renderReadCall(
 	context: RenderContextLike,
 ): Component {
 	const record = asRecord(args) ?? {};
-	const path = typeof record.path === "string" ? record.path : "";
-	const symbol = typeof record.symbol === "string" ? record.symbol : "";
+	const path = typeof record.path === "string" ? sanitizeTerminalText(record.path) : "";
+	const symbol = typeof record.symbol === "string" ? sanitizeTerminalText(record.symbol) : "";
 	const cwd = context.cwd;
 	let line = toolLabel(theme, "read");
 	if (path) {
@@ -415,7 +474,7 @@ function renderEditCall(
 	context: RenderContextLike,
 ): Component {
 	const record = asRecord(args) ?? {};
-	const path = typeof record.path === "string" ? record.path : "";
+	const path = typeof record.path === "string" ? sanitizeTerminalText(record.path) : "";
 	const n = countEdits(record);
 	let line = toolLabel(theme, "edit");
 	if (path) {
@@ -435,7 +494,7 @@ function renderWriteCall(
 	context: RenderContextLike,
 ): Component {
 	const record = asRecord(args) ?? {};
-	const path = typeof record.path === "string" ? record.path : "";
+	const path = typeof record.path === "string" ? sanitizeTerminalText(record.path) : "";
 	const content = typeof record.content === "string" ? record.content : undefined;
 	const lines = content === undefined ? 0 : content.split("\n").length;
 	let line = toolLabel(theme, "write");
@@ -456,7 +515,7 @@ function renderBashCall(
 	context: RenderContextLike,
 ): Component {
 	const record = asRecord(args) ?? {};
-	const raw = typeof record.command === "string" ? record.command : "";
+	const raw = typeof record.command === "string" ? sanitizeTerminalText(record.command) : "";
 	const first = raw.split("\n")[0] ?? "";
 	const command = raw.includes("\n") ? `${first} …` : first;
 	const line = `${toolLabel(theme, "bash")} ${themeFg(theme, "muted", command || "...")}`;
@@ -469,13 +528,14 @@ function renderLsCall(
 	context: RenderContextLike,
 ): Component {
 	const record = asRecord(args) ?? {};
-	const path = typeof record.path === "string" ? record.path : ".";
-	const glob = typeof record.glob === "string" ? record.glob : "";
+	const path = typeof record.path === "string" ? sanitizeTerminalText(record.path) : ".";
+	const glob = typeof record.glob === "string" ? sanitizeTerminalText(record.glob) : "";
 	const limit = record.limit;
+	const limitText = typeof limit === "number" || typeof limit === "string" ? sanitizeTerminalText(String(limit)) : undefined;
 	let line = `${toolLabel(theme, "ls")} ${linkPath(themeFg(theme, "accent", shortenPath(path)), path, context.cwd)}`;
 	if (glob) line += ` ${themeFg(theme, "dim", `glob: ${glob}`)}`;
-	if (typeof limit === "number" || typeof limit === "string") {
-		line += ` ${themeFg(theme, "dim", `limit: ${String(limit)}`)}`;
+	if (limitText !== undefined) {
+		line += ` ${themeFg(theme, "dim", `limit: ${limitText}`)}`;
 	}
 	return reuseOrCreateText(context.lastComponent, clampLine(line, context.width));
 }
@@ -533,8 +593,8 @@ function renderReadResult(
 				: `loaded ${visible} ${word}`,
 		);
 		const symbol = asRecord(ptc.symbol);
-		if (symbol && typeof symbol.name === "string") badges.push(`symbol: ${symbol.name}`);
-		else if (typeof ptc.symbol === "string") badges.push(`symbol: ${ptc.symbol}`);
+		if (symbol && typeof symbol.name === "string") badges.push(`symbol: ${sanitizeTerminalText(symbol.name)}`);
+		else if (typeof ptc.symbol === "string") badges.push(`symbol: ${sanitizeTerminalText(ptc.symbol)}`);
 		if (ptc.map) badges.push("map");
 		badges.push(...warningBadges(ptc.warnings));
 	} else {
@@ -573,7 +633,7 @@ function renderEditResult(
 	const warnings = warningBadges(ptc?.warnings);
 	const semantic = asRecord(ptc?.semanticSummary);
 	const classification =
-		typeof semantic?.classification === "string" ? semantic.classification : undefined;
+		typeof semantic?.classification === "string" ? sanitizeTerminalText(semantic.classification) : undefined;
 
 	if (noopEdits.length > 0 && !isError) {
 		const lines = [summaryLine("no-op")];
@@ -663,8 +723,8 @@ function renderWriteResult(
 
 		const rawLines = ptcLines.flatMap((item) => {
 			const row = asRecord(item);
-			if (typeof row?.raw === "string") return [row.raw];
-			return typeof item === "string" ? [item] : [];
+			if (typeof row?.raw === "string") return [sanitizeTerminalText(row.raw)];
+			return typeof item === "string" ? [sanitizeTerminalText(item)] : [];
 		});
 		const shown = rawLines.slice(0, CONTENT_PREVIEW_MAX_LINES);
 		const hidden = rawLines.length - shown.length;
@@ -765,7 +825,7 @@ function lsEntryLines(entries: unknown[], theme: ThemeLike | undefined): string[
 		if (typeof entry?.name !== "string") return [];
 		const type = entry.type === "dir" ? "▸" : "·";
 		const suffix = entry.type === "dir" ? "/" : "";
-		return [themeFg(theme, entry.type === "dir" ? "accent" : "toolOutput", `${type} ${entry.name}${suffix}`)];
+		return [themeFg(theme, entry.type === "dir" ? "accent" : "toolOutput", `${type} ${sanitizeTerminalText(entry.name)}${suffix}`)];
 	});
 }
 

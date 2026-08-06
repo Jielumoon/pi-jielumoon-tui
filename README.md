@@ -14,6 +14,7 @@
 - 会话耗时、扩展状态以及 Blackhole O/R/P/C 指标
 - 保留原版 Footer 的显示设置和持久化配置
 - 彩条使用背景色块渲染，低用量时仍保持稳定布局
+- 订阅额度作为会话统计的一部分，紧跟费用 / `sub`、位于会话时长前；周窗口统一显示为 `7d`
 
 ### Thought trail
 
@@ -84,6 +85,7 @@ pi -e /home/jielumoon/opt/projects/pi-tui/pi-jielumoon
 /jielumoon-tui reset                 恢复默认显示项
 /jielumoon-tui planning on           显示右侧计划阶段状态
 /jielumoon-tui planning off          隐藏右侧计划阶段状态
+/jielumoon-tui usage off            隐藏扩展状态与订阅额度
 ```
 
 也可以直接切换单项：
@@ -115,8 +117,7 @@ npm audit --omit=dev
 
 扩展资源由 `package.json` 的 `pi.extensions` 声明：
 
-- `src/index.ts`：唯一自有入口，统一注册 nano-context、Footer、Thought trail、消息样式、Sakura 输入框和工作状态
-- bundled `@narumitw/pi-usage`：保持独立入口，提供 Provider usage 状态
+- `src/index.ts`：唯一自有入口，统一注册 nano-context、Footer、Thought trail、消息样式、Sakura 输入框、工作状态和自研订阅用量
 
 ## 兼容性
 
@@ -125,7 +126,13 @@ npm audit --omit=dev
 - `@earendil-works/pi-tui >=0.83.0`
 - `@earendil-works/pi-ai >=0.83.0`
 
-Pi 核心包由宿主提供，不会被重复打包；`@narumitw/pi-tui-kit` 与 `@narumitw/pi-usage` 随扩展一起打包。
+### 自研订阅用量
+
+Footer 会按当前模型在左侧会话统计中显示 Codex、Claude、OpenRouter 或 Grok 的额度：它紧跟费用 / `sub`，位于会话时长前，例如 `… · 13.162 sub · 7d 37% ↻ 1d · 1m25s`。`/usage` 可强制刷新当前账户的简要详情。成功结果缓存 60 秒，失败遵守 Retry-After 和退避时间；自定义代理模型不会把凭证发送到官方额度接口。
+
+支持的额度接口来自各 Provider 的官方/客户端用量端点，认证使用 Pi 当前 ModelRegistry 解析的凭证。Codex、Claude、Grok 需要 OAuth 账户，OpenRouter 使用当前 API key。
+
+Pi 核心包由宿主提供，不会被重复打包；订阅用量只使用本扩展内的四个 Provider 适配器。
 
 ## 许可证
 

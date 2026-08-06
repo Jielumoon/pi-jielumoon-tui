@@ -16,10 +16,11 @@ import {
 	collectModelSnapshot,
 	SessionUsageCollector,
 } from "./footer/usage.ts";
+import type { SubscriptionUsageSource } from "./footer/subscription-usage.ts";
 
 const REFRESH_INTERVAL_MS = 30_000;
 
-export default function vibrantFooter(pi: ExtensionAPI): void {
+export default function vibrantFooter(pi: ExtensionAPI, subscriptionUsage?: SubscriptionUsageSource): void {
 	const settings = readFooterSettings();
 	const usageCollector = new SessionUsageCollector();
 	let enabled = true;
@@ -86,10 +87,12 @@ export default function vibrantFooter(pi: ExtensionAPI): void {
 				if (activeContext) refreshSnapshot(activeContext);
 				else renderRequest();
 			});
+			const unsubscribeSubscriptionUsage = subscriptionUsage?.subscribe(renderRequest);
 
 			return {
 				dispose() {
 					unsubscribeBranch();
+					unsubscribeSubscriptionUsage?.();
 					if (requestRender === renderRequest) requestRender = undefined;
 				},
 				invalidate() {},
@@ -101,6 +104,7 @@ export default function vibrantFooter(pi: ExtensionAPI): void {
 						{
 							branch: footerData.getGitBranch(),
 							extensionStatuses: footerData.getExtensionStatuses(),
+							subscriptionUsage: subscriptionUsage?.getState(),
 						},
 						width,
 						theme,
