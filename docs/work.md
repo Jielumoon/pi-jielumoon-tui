@@ -33,6 +33,7 @@
 2026-08-03 09:40---用户同意建立测试结构并要求评估 pi-open-tui 输入框---新增 `tsx` 测试脚本和 Footer 排版、usage 增量、Working spinner/transcript、单入口 manifest 共 7 项回归测试；Pi 0.83 核心包作为开发依赖，使独立开发环境可执行测试和类型检查---修改 `package.json`、`package-lock.json`、`tsconfig.json`、`tests/*`、`README.md`、`AGENTS.md`；测试与类型检查通过。`npm audit --omit=dev` 发现 bundled `pi-usage` 的 Pi peer 依赖链中 `brace-expansion`/`undici` 上游高危公告，自动修复会降级 Pi 到不兼容版本，未执行强制修复，等待处理策略确认。
 
 2026-08-03 10:00---用户确认添加 Sakura 输入框---新增继承 `CustomEditor` 的 `SakuraEditor`，仅包一层 macaron 圆角框；保留 Pi 输入、补全、粘贴、历史与快捷键，窄宽度退回原生框，已有自定义 Editor 时自动让位且关闭时不误清理后来扩展的 Editor---新增 `src/sakura-editor.ts`、`tests/sakura-editor.test.ts`，并修改 `src/index.ts`、`README.md`、`AGENTS.md`、`package.json`；11 项测试、类型检查、打包检查、RPC 加载及本地 `pi install` 均通过；隔离的发布 tarball 生产依赖审计为 0 vulnerabilities，根目录审计仅保留 Pi 0.83 上游公告。
+
 2026-08-06 --- readmap 工具结果可视化差，需要在 pi-jielumoon 内接管 renderer --- 新增 readmap-renderers：通过 hashline:tool-executors / globalThis / registerTool 观察器只替换 renderCall/renderResult，自研 DiffBody 与四工具内容渲染，尊重 diffDisplay/previewLines --- 改了 src/readmap-renderers.ts、src/index.ts、tests/readmap-renderers.test.ts、plan/2026-08-06-readmap-renderer/*、docs/work.md
 
 2026-08-06 --- write/edit 默认展示过多，bash 长输出应先预览再折叠 --- 取消 settings.diffDisplay 强行全开；edit/write 折叠 diff 预览 8 行；write 默认只摘要、展开最多 12 行；bash 短输出阈值 12 行、长输出先预览 12 行 --- 改了 src/readmap-renderers.ts、tests/readmap-renderers.test.ts
@@ -40,7 +41,6 @@
 2026-08-06 --- readmap 视觉已由 pi-jielumoon 接管，settings 里视觉项会干扰默认折叠 --- 清空 ~/.pi/agent/hashline-readmap/settings.json 中的 edit.diffDisplay / display.previewLines（文件仅剩空对象，执行类配置未动） --- 改了 ~/.pi/agent/hashline-readmap/settings.json
 
 2026-08-06 --- 审查发现视觉配置热路径、write 空行丢失及 registerTool 重载链兼容问题 --- 删除 readmap 视觉设置解析（减少 52 行同步 I/O）；write 保留合法空行；registerTool 始终包裹当前函数，避免 pi-tool-display 等后来拦截器在 /reload 后被跳过；新增两项回归测试 --- 改了 src/readmap-renderers.ts、tests/readmap-renderers.test.ts
-
 
 2026-08-06 --- 用户确认接管 ls --- 新增 ls 路径/`glob`/`limit` 调用行、目录/文件类型标记、折叠前 12 项预览、展开列表、空目录、截断和错误状态；保留原 execute 与结果数据 --- 修改 src/readmap-renderers.ts、tests/readmap-renderers.test.ts、handoff/readmap-renderer.md、plan/2026-08-06-readmap-renderer/*、docs/work.md；24 项测试、类型检查、打包检查和 diff 空白检查通过。
 
@@ -51,3 +51,9 @@
 2026-08-06 --- 用户目视确认额度放在右侧模型区仍不妥且 `1w` 丑 --- 将结构化额度从右侧 metadata 改为左侧 session metrics 的 `cost/sub` 后一段、elapsed 前一段；窗口标签统一使用 `7d`；删除右对齐换行分支，保持数据流简单 --- 修改 src/footer/render.ts、src/footer/subscription-usage.ts、tests/footer-format.test.ts、tests/subscription-usage.test.ts、README.md、plan/*、docs/work.md；33 项测试和类型检查通过。
 
 2026-08-06 --- 用户要求全修本轮与 `b46acae` 审查问题 --- 在 readmap 的调用参数、工具结果、diff、ls 条目等外部文本边界移除终端控制序列，阻断 OSC/CSI 注入；429 在已有缓存时保持 ready 状态；四家 Provider 的周标签统一为 `7d`；`/usage` 失败时给出提示；删除遗留 status formatter 和重复时间分支 --- 修改 src/readmap-renderers.ts、src/footer/subscription-usage.ts、tests/readmap-renderers.test.ts、tests/subscription-usage.test.ts、plan/*、docs/work.md；35 项测试、类型检查、打包检查、生产依赖审计和 diff 空白检查通过。
+
+2026-08-07 22:15---用户批准预览美化 P0：去重复摘要、gutter 对齐、统一折叠提示---删除 edit/overwritten write 的重复 diff 摘要；用 `visibleWidth` 对齐 diff/hashline gutter 与路径；统一 `showing X of Y` 提示并补 Unicode/排版回归---修改 src/readmap-renderers.ts、tests/readmap-renderers.test.ts、plan/task_plan.md、plan/progress.md、docs/work.md；36 项测试、类型检查和打包检查通过。
+
+2026-08-07 22:40---用户要求继续完成 P1/P2 预览美化---增加 hashline 三段着色、Bash stdout 层级与 exit/耗时摘要、ls 宽屏双列和 CJK 裁剪；按 feature-detect 支持 hunk/inline span、split/compact/summary 降级、whitespace/bidi 诊断和 plain/screen-reader 标签；使用 Pi 原生 `toolDiffAdded`/`toolDiffRemoved` 颜色并保留无色安全回退---修改 src/readmap-renderers.ts、tests/readmap-renderers.test.ts、plan/findings.md、plan/progress.md、plan/task_plan.md、docs/work.md；38 项测试、类型检查、打包检查、依赖审计和 diff 空白检查通过。
+
+2026-08-07 23:55---未提交预览美化审查发现测试伪造宿主字段、split 错配、ls 计数错误、大数组栈溢出和无障碍模式未贯通---按 Pi 0.83 真实契约把宽度排版延迟到 `Component.render(width)`，使用 `inlineDiffs` 索引配对 split，修复双侧 hunk/ls 计数/reduce 扫描，删除不存在的 Bash metadata，并让 readmap 与 message-borders 共享输出模式---修改 src/readmap-renderers.ts、src/message-borders.ts、src/render-mode.ts、tests/readmap-renderers.test.ts、plan/task_plan.md、plan/progress.md、docs/work.md；40 项测试、类型检查、打包检查、依赖审计、diff 空白检查、RPC 加载和真实伪终端 `/reload` 检查通过。

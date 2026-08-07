@@ -15,6 +15,7 @@ import {
 	rgbForeground,
 } from "./gradient";
 import { installPrototypePatch } from "./prototype-patch-registry";
+import { resolveRenderMode } from "./render-mode";
 
 type Cleanup = () => void;
 type RenderedLines = string[];
@@ -160,7 +161,7 @@ function renderSakuraUserMessage(
 	theme: Theme | undefined,
 ): RenderedLines | undefined {
 	const text = receiver.text;
-	if (typeof text !== "string" || width < MIN_BORDER_WIDTH) return undefined;
+	if (resolveRenderMode() !== "color" || typeof text !== "string" || width < MIN_BORDER_WIDTH) return undefined;
 
 	const cached = userMessageRenderCache.get(receiver as object);
 	if (cached?.text === text && cached.width === width && cached.theme === theme) return cached.lines;
@@ -234,6 +235,7 @@ function isHorizontalBorder(line: string): boolean {
 
 function frameToolMessage(lines: RenderedLines, width: number, runtime: ToolRuntime): RenderedLines {
 	if (
+		resolveRenderMode() !== "color" ||
 		width <= 2 ||
 		lines.length === 0 ||
 		runtime.hideComponent ||
@@ -266,7 +268,7 @@ function frameToolMessage(lines: RenderedLines, width: number, runtime: ToolRunt
 }
 
 function repaintBashBorders(lines: RenderedLines, width: number): RenderedLines {
-	if (width <= 2 || lines.length === 0 || containsTerminalImage(lines)) return lines;
+	if (resolveRenderMode() !== "color" || width <= 2 || lines.length === 0 || containsTerminalImage(lines)) return lines;
 
 	const plainLines = lines.map(stripAnsi);
 	const running = plainLines.some((line) => line.includes("Running..."));
@@ -325,7 +327,9 @@ export function installMessageBorders(getTheme: () => Theme | undefined): Cleanu
 		({ predecessor, receiver, args }) => {
 			const runtime = receiver as ToolRuntime;
 			const width = args[0];
+			const decorative = resolveRenderMode() === "color";
 			if (
+				decorative &&
 				typeof width === "number" &&
 				isObject(receiver) &&
 				runtime.isPartial === false &&
@@ -348,6 +352,7 @@ export function installMessageBorders(getTheme: () => Theme | undefined): Cleanu
 			if (!isRenderedLines(rendered) || typeof width !== "number") return rendered;
 			const framed = frameToolMessage(rendered, width, runtime);
 			if (
+				decorative &&
 				isObject(receiver) &&
 				runtime.isPartial === false &&
 				!runtime.hideComponent &&
@@ -400,12 +405,13 @@ export function installMessageBorders(getTheme: () => Theme | undefined): Cleanu
 		({ predecessor, receiver, args }) => {
 			const runtime = receiver as BashRuntime;
 			const width = args[0];
+			const decorative = resolveRenderMode() === "color";
 			const outputLines = runtime.outputLines;
 			const outputLength = outputLines?.length ?? 0;
 			const lastOutputLine = outputLines?.at(-1);
 			const settled = runtime.status !== undefined && runtime.status !== "running";
 
-			if (typeof width === "number" && isObject(receiver) && settled) {
+			if (decorative && typeof width === "number" && isObject(receiver) && settled) {
 				const cached = bashRenderCache.get(receiver);
 				if (
 					cached?.width === width &&
@@ -422,7 +428,7 @@ export function installMessageBorders(getTheme: () => Theme | undefined): Cleanu
 			const rendered = Reflect.apply(predecessor, receiver, args);
 			if (!isRenderedLines(rendered) || typeof width !== "number") return rendered;
 			const repainted = repaintBashBorders(rendered, width);
-			if (isObject(receiver) && settled) {
+			if (decorative && isObject(receiver) && settled) {
 				bashRenderCache.set(receiver, {
 					width,
 					outputLines,

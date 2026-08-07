@@ -10,6 +10,7 @@ import {
 	visibleWidth,
 	wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
+import { resolveRenderMode, type RenderMode } from "./render-mode";
 
 /** 本扩展已接管的工具对象标记，保证 reload 幂等。 */
 export const READMAP_RENDERER_MARK = Symbol.for("pi-jielumoon.readmap-renderer");
@@ -18,8 +19,8 @@ export const READMAP_RENDERER_MARK = Symbol.for("pi-jielumoon.readmap-renderer")
 export const TARGET_TOOL_NAMES = new Set(["read", "edit", "write", "bash", "ls"]);
 
 const SUMMARY_PREFIX = "↳";
-const EXPAND_HINT = " • Ctrl+O to expand";
-const HASHLINE_RE = /^(\d+:[0-9a-fA-F]+\|)(.*)$/;
+const EXPAND_HINT = " · Ctrl+O to expand";
+const HASHLINE_RE = /^(\d+):([0-9a-fA-F]+)\|(.*)$/;
 /** 短 bash：不超过此行数时折叠态也整段展示。 */
 const BASH_SHORT_MAX_LINES = 12;
 const BASH_SHORT_MAX_CHARS = 2_000;
@@ -31,6 +32,15 @@ const CONTENT_PREVIEW_MAX_LINES = 12;
 const DIFF_COLLAPSED_PREVIEW_LINES = 8;
 /** ls 折叠态最多展示的目录条目。 */
 const LS_COLLAPSED_PREVIEW_ENTRIES = 12;
+const SPLIT_DIFF_MIN_WIDTH = 100;
+const SUMMARY_DIFF_MAX_WIDTH = 23;
+
+
+type RenderPresentation = {
+	mode: RenderMode;
+	diagnostics: boolean;
+	theme: ThemeLike | undefined;
+};
 
 type ThemeLike = {
 	// color 用 string 宽化，兼容 Pi ThemeColor 与 mock theme
@@ -44,17 +54,22 @@ function asThemeLike(theme: unknown): ThemeLike | undefined {
 
 type RenderContextLike = {
 	args?: unknown;
+	toolCallId?: string;
+	invalidate?: () => void;
+	lastComponent?: Component;
+	state?: unknown;
 	cwd?: string;
-	width?: number;
+	executionStarted?: boolean;
+	argsComplete?: boolean;
+	isPartial?: boolean;
+	expanded?: boolean;
+	showImages?: boolean;
+	isError?: boolean;
+};
+
+type RenderOptionsLike = {
 	expanded?: boolean;
 	isPartial?: boolean;
-	isError?: boolean;
-	argsComplete?: boolean;
-	executionStarted?: boolean;
-	lastComponent?: Component;
-	toolCallId?: string;
-	state?: unknown;
-	invalidate?: () => void;
 };
 
 type ToolResultLike = {
@@ -69,10 +84,28 @@ type DiffEntry =
 	| { kind: "remove"; oldLine: number; text: string }
 	| { kind: "meta"; text: string };
 
+type DiffSpan = { kind: "equal" | "add" | "remove"; text: string };
+
+type InlineDiff = {
+	removeLineIndex: number;
+	addLineIndex: number;
+	removeSpans: DiffSpan[];
+	addSpans: DiffSpan[];
+};
+
+type DiffBlockRange = {
+	kind: "add" | "remove";
+	startLine: number;
+	endLine: number;
+};
+
 type DiffData = {
 	version?: number;
 	entries: DiffEntry[];
 	stats: { added: number; removed: number; context?: number };
+	language?: string;
+	blockRanges?: DiffBlockRange[];
+	inlineDiffs?: InlineDiff[];
 };
 
 type PatchableTool = {
@@ -140,12 +173,21 @@ export function clampLines(lines: readonly string[], width: number | undefined):
 
 /**
  * 工具参数和结果来自文件、命令或模型，不能让它们携带控制终端的转义序列。
- * 保留换行，制表符规范为空格；主题 ANSI 只会在此函数之后由本扩展生成。
+ * 诊断模式额外把 tab、尾随空格和双向控制字符变成可见标记。
  */
-function sanitizeTerminalText(value: string): string {
+const BIDI_CONTROL_CODES = new Set([
+	0x061c, 0x200e, 0x200f, 0x202a, 0x202b, 0x202c, 0x202d, 0x202e,
+	0x2066, 0x2067, 0x2068, 0x2069,
+]);
+
+function sanitizeTerminalText(value: string, diagnostics = false): string {
 	let safe = "";
 	for (let index = 0; index < value.length; index++) {
 		const code = value.charCodeAt(index);
+		if (BIDI_CONTROL_CODES.has(code)) {
+			if (diagnostics) safe += "⟦bidi⟧";
+			continue;
+		}
 		if (code === 0x1b) {
 			const kind = value[index + 1];
 			if (kind === "]") {
@@ -188,13 +230,52 @@ function sanitizeTerminalText(value: string): string {
 			continue;
 		}
 		if (code === 0x09) {
-			safe += " ";
+			safe += diagnostics ? "⇥" : " ";
 			continue;
 		}
 		if (code <= 0x1f || (code >= 0x7f && code <= 0x9f)) continue;
 		safe += value[index]!;
 	}
-	return safe;
+	return diagnostics ? safe.replace(/ +(?=\n|$)/g, (spaces) => "·".repeat(spaces.length)) : safe;
+}
+
+
+function resolvePresentation(theme: unknown): RenderPresentation {
+	const requested = resolveRenderMode();
+	return {
+		mode: requested,
+		diagnostics: process.env.PI_READMAP_DIAGNOSTICS === "1",
+		theme: requested === "color" ? asThemeLike(theme) : undefined,
+	};
+}
+
+function displayText(value: string, presentation: RenderPresentation): string {
+	return sanitizeTerminalText(value, presentation.diagnostics);
+}
+
+function styleText(presentation: RenderPresentation, color: string, text: string): string {
+	return themeFg(presentation.theme, color, text);
+}
+
+function padStartVisible(value: string, width: number): string {
+	return " ".repeat(Math.max(0, width - visibleWidth(value))) + value;
+}
+
+function padEndVisible(value: string, width: number): string {
+	return value + " ".repeat(Math.max(0, width - visibleWidth(value)));
+}
+
+function collapsedHint(
+	shown: number,
+	total: number,
+	unit: string,
+	expandable = true,
+	presentation?: RenderPresentation,
+): string {
+	const safeTotal = Math.max(0, Math.floor(total));
+	const safeShown = Math.max(0, Math.min(Math.floor(shown), safeTotal));
+	const hint = `showing ${safeShown} of ${safeTotal} ${unit}${expandable ? EXPAND_HINT : ""}`;
+	return presentation?.mode === "screen-reader" ? `output: ${hint}` : `… ${hint}`;
 }
 
 function wrapWithHangingIndent(prefix: string, content: string, width: number): string[] {
@@ -210,17 +291,43 @@ function wrapWithHangingIndent(prefix: string, content: string, width: number): 
 	);
 }
 
-function wrapHashlines(text: string, width: number): string[] {
+function wrapHashlines(text: string, width: number, presentation: RenderPresentation): string[] {
 	const out: string[] = [];
-	for (const line of sanitizeTerminalText(text).split("\n")) {
+	const lines = displayText(text, presentation).split("\n");
+	const parsed = lines.map((line) => {
 		const match = line.match(HASHLINE_RE);
-		if (!match) {
-			out.push(...wrapTextWithAnsi(line, width).map((part) => clampLine(part, width)));
+		return match
+			? { lineNo: match[1]!, hash: match[2]!, content: match[3] ?? "" }
+			: undefined;
+	});
+	const hashlineParts = parsed.filter(
+		(line): line is NonNullable<typeof line> => line !== undefined,
+	);
+	const lineNoWidth = hashlineParts.reduce(
+		(max, line) => Math.max(max, visibleWidth(line.lineNo)),
+		1,
+	);
+	const hashWidth = hashlineParts.reduce(
+		(max, line) => Math.max(max, visibleWidth(line.hash)),
+		1,
+	);
+
+	for (const [index, line] of lines.entries()) {
+		const part = parsed[index];
+		if (!part) {
+			out.push(
+				...wrapTextWithAnsi(line, width).map((item) =>
+					clampLine(styleText(presentation, "toolOutput", item), width),
+				),
+			);
 			continue;
 		}
-		const prefix = match[1] ?? "";
-		const content = match[2] ?? "";
-		out.push(...wrapWithHangingIndent(prefix, content, width));
+		const prefix =
+			styleText(presentation, "dim", padStartVisible(part.lineNo, lineNoWidth)) +
+			styleText(presentation, "muted", ":") +
+			styleText(presentation, "accent", padEndVisible(part.hash, hashWidth)) +
+			styleText(presentation, "muted", "|");
+		out.push(...wrapWithHangingIndent(prefix, styleText(presentation, "toolOutput", part.content), width));
 	}
 	return out;
 }
@@ -238,31 +345,41 @@ function linkPath(styled: string, rawPath: string, cwd: string | undefined): str
 }
 
 function shortenPath(path: string, max = 48): string {
-	if (path.length <= max) return path;
+	if (visibleWidth(path) <= max) return path;
 	const parts = path.replaceAll("\\", "/").split("/");
 	if (parts.length <= 2) return truncateToWidth(path, max);
 	let result = parts[parts.length - 1] ?? path;
 	for (let i = parts.length - 2; i >= 0; i--) {
 		const candidate = `${parts[i]}/${result}`;
-		if (candidate.length + 2 > max) break;
+		if (visibleWidth(candidate) + 2 > max) break;
 		result = candidate;
 	}
-	return result === path ? truncateToWidth(path, max) : `…/${result}`;
+	const shortened = `…/${result}`;
+	return visibleWidth(shortened) <= max ? shortened : truncateToWidth(path, max);
 }
 
-function textOf(result: ToolResultLike): string {
+function textOf(result: ToolResultLike, presentation?: RenderPresentation): string {
 	const parts = result.content
 		?.filter((item) => item?.type === "text" && typeof item.text === "string")
 		.map((item) => item.text);
-	return sanitizeTerminalText(parts?.join("\n") ?? "");
+	return displayText(parts?.join("\n") ?? "", presentation ?? {
+		mode: "color",
+		diagnostics: false,
+		theme: undefined,
+	});
 }
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
 	return value && typeof value === "object" ? (value as Record<string, unknown>) : undefined;
 }
 
-function summaryLine(summary: string, hidden = false): string {
-	return hidden ? `${SUMMARY_PREFIX} ${summary}${EXPAND_HINT}` : `${SUMMARY_PREFIX} ${summary}`;
+function summaryLine(
+	summary: string,
+	presentation?: RenderPresentation,
+	label = "tool",
+): string {
+	if (presentation?.mode === "screen-reader") return `${label}: ${summary}`;
+	return `${SUMMARY_PREFIX} ${summary}`;
 }
 
 function toolLabel(theme: ThemeLike | undefined, name: string): string {
@@ -284,6 +401,49 @@ function reuseOrCreateText(last: Component | undefined, text: string): Text {
 	return new Text(text, 0, 0);
 }
 
+
+type WidthLineRenderer = (width: number) => string[];
+
+/** 仅延迟依赖终端宽度的纯文本排版；外框仍由 message-borders 负责。 */
+class WidthAwareTextComponent implements Component {
+	private renderLines: WidthLineRenderer;
+	private cachedWidth: number | undefined;
+	private cachedLines: string[] | undefined;
+
+	constructor(renderLines: WidthLineRenderer) {
+		this.renderLines = renderLines;
+	}
+
+	update(renderLines: WidthLineRenderer): void {
+		this.renderLines = renderLines;
+		this.invalidate();
+	}
+
+	invalidate(): void {
+		this.cachedWidth = undefined;
+		this.cachedLines = undefined;
+	}
+
+	render(width: number): string[] {
+		const normalized = normalizeWidth(width);
+		if (this.cachedLines && this.cachedWidth === normalized) return this.cachedLines;
+		this.cachedLines = clampLines(this.renderLines(normalized), normalized);
+		this.cachedWidth = normalized;
+		return this.cachedLines;
+	}
+}
+
+function reuseOrCreateWidthAware(
+	last: Component | undefined,
+	renderLines: WidthLineRenderer,
+): WidthAwareTextComponent {
+	if (last instanceof WidthAwareTextComponent) {
+		last.update(renderLines);
+		return last;
+	}
+	return new WidthAwareTextComponent(renderLines);
+}
+
 // ─── diff body ───────────────────────────────────────────────────
 
 function isDiffData(value: unknown): value is DiffData {
@@ -293,8 +453,8 @@ function isDiffData(value: unknown): value is DiffData {
 	return typeof stats?.added === "number" && typeof stats?.removed === "number";
 }
 
-function entryText(entry: DiffEntry): string {
-	return "text" in entry ? sanitizeTerminalText(entry.text) : "";
+function entryText(entry: DiffEntry, presentation: RenderPresentation): string {
+	return "text" in entry ? displayText(entry.text, presentation) : "";
 }
 
 function entryLineNo(entry: DiffEntry): string {
@@ -310,10 +470,10 @@ function entryMarker(entry: DiffEntry): string {
 	return " ";
 }
 
-function tintEntry(theme: ThemeLike | undefined, entry: DiffEntry, text: string): string {
-	if (entry.kind === "add") return themeFg(theme, "success", text);
-	if (entry.kind === "remove") return themeFg(theme, "error", text);
-	return themeFg(theme, "toolOutput", text);
+function tintEntry(presentation: RenderPresentation, entry: DiffEntry, text: string): string {
+	if (entry.kind === "add") return styleText(presentation, "toolDiffAdded", text);
+	if (entry.kind === "remove") return styleText(presentation, "toolDiffRemoved", text);
+	return styleText(presentation, "toolOutput", text);
 }
 
 function renderDiffLines(
@@ -321,42 +481,196 @@ function renderDiffLines(
 	theme: ThemeLike | undefined,
 	width: number,
 	expanded: boolean,
+	presentation?: RenderPresentation,
 ): string[] {
 	const w = normalizeWidth(width);
-	const header = clampLine(
-		`${SUMMARY_PREFIX} diff +${diffData.stats.added} -${diffData.stats.removed}`,
-		w,
+	const p = presentation ?? { mode: "color" as const, diagnostics: false, theme: asThemeLike(theme) };
+	const entries = diffData.entries.filter((entry) => entry.kind !== "meta");
+	const mode =
+		p.mode === "screen-reader"
+			? "unified"
+			: w < SUMMARY_DIFF_MAX_WIDTH
+				? "summary"
+				: w < 50
+					? "compact"
+					: w >= SPLIT_DIFF_MIN_WIDTH && entries.some((entry) => entry.kind === "remove" || entry.kind === "context")
+						? "split"
+						: "unified";
+	const renderable = mode === "compact" ? entries.filter((entry) => entry.kind !== "context") : entries;
+	const lineNumberWidth = renderable.reduce(
+		(max, entry) => Math.max(max, visibleWidth(entryLineNo(entry))),
+		1,
 	);
-	const compact = w < 50;
-	const rows: string[] = [header];
+	const oldLineNumberWidth = renderable.reduce(
+		(max, entry) => entry.kind === "add" ? max : Math.max(max, visibleWidth(String(entry.oldLine))),
+		1,
+	);
+	const newLineNumberWidth = renderable.reduce(
+		(max, entry) => entry.kind === "remove" ? max : Math.max(max, visibleWidth(String(entry.newLine))),
+		1,
+	);
+	const rows: string[] = [];
 	let shown = 0;
-	let totalRenderable = 0;
-
-	for (const entry of diffData.entries) {
-		if (entry.kind === "meta") continue;
-		if (compact && entry.kind === "context") continue;
-		totalRenderable++;
-		if (!expanded && shown >= DIFF_COLLAPSED_PREVIEW_LINES) continue;
-
-		const prefix = compact
-			? `▌${entryMarker(entry)} ${entryLineNo(entry)} `
-			: `▌${entryMarker(entry)} ${entryLineNo(entry)} │ `;
-		const body = entryText(entry);
-		const wrapped = wrapWithHangingIndent(prefix, body, w);
-		for (const line of wrapped) rows.push(tintEntry(theme, entry, line));
-		shown++;
+	const splitPairs = new Map<number, number>();
+	const splitPairTargets = new Set<number>();
+	if (mode === "split" && Array.isArray(diffData.inlineDiffs)) {
+		for (const pair of diffData.inlineDiffs) {
+			if (!Number.isInteger(pair.removeLineIndex) || !Number.isInteger(pair.addLineIndex)) continue;
+			const removeEntry = diffData.entries[pair.removeLineIndex];
+			const addEntry = diffData.entries[pair.addLineIndex];
+			if (
+				removeEntry?.kind !== "remove" ||
+				addEntry?.kind !== "add" ||
+				pair.addLineIndex <= pair.removeLineIndex ||
+				splitPairs.has(pair.removeLineIndex) ||
+				splitPairTargets.has(pair.addLineIndex)
+			) continue;
+			splitPairs.set(pair.removeLineIndex, pair.addLineIndex);
+			splitPairTargets.add(pair.addLineIndex);
+		}
 	}
 
-	if (!expanded && totalRenderable > shown) {
-		const hidden = totalRenderable - shown;
-		rows.push(
-			clampLine(
-				`… (${hidden} more diff ${hidden === 1 ? "line" : "lines"}${EXPAND_HINT})`,
-				w,
-			),
+	const validSpan = (value: unknown): value is DiffSpan => {
+		const span = asRecord(value);
+		return (
+			span !== undefined &&
+			(span.kind === "equal" || span.kind === "add" || span.kind === "remove") &&
+			typeof span.text === "string"
 		);
-	}
+	};
+	const inlineText = (index: number, entry: DiffEntry): string => {
+		const pair = Array.isArray(diffData.inlineDiffs)
+			? diffData.inlineDiffs.find((candidate) => {
+					const record = asRecord(candidate);
+					return (
+						record !== undefined &&
+						typeof record.removeLineIndex === "number" &&
+						typeof record.addLineIndex === "number" &&
+						(entry.kind === "remove"
+							? record.removeLineIndex === index
+							: entry.kind === "add" && record.addLineIndex === index)
+					);
+				})
+			: undefined;
+		const spans = pair
+			? entry.kind === "remove"
+				? pair.removeSpans
+				: entry.kind === "add"
+					? pair.addSpans
+					: undefined
+			: undefined;
+		if (!Array.isArray(spans) || !spans.every(validSpan)) return entryText(entry, p);
+		return spans
+			.map((span) =>
+				styleText(
+					p,
+					span.kind === "add" ? "toolDiffAdded" : span.kind === "remove" ? "toolDiffRemoved" : "toolOutput",
+					displayText(span.text, p),
+				),
+			)
+			.join("");
+	};
+	const hunkLabel = (entry: DiffEntry): string | undefined => {
+		if (!Array.isArray(diffData.blockRanges)) return undefined;
+		const line = entry.kind === "add" ? entry.newLine : entry.kind === "remove" ? entry.oldLine : undefined;
+		if (line === undefined) return undefined;
+		const range = diffData.blockRanges.find((candidate) => {
+			const record = asRecord(candidate);
+			return (
+				record !== undefined &&
+				record.kind === entry.kind &&
+				typeof record.startLine === "number" &&
+				typeof record.endLine === "number" &&
+				record.startLine === line
+			);
+		});
+		if (!range) return undefined;
+		const language = typeof diffData.language === "string" ? ` · ${displayText(diffData.language, p)}` : "";
+		const label = `${entry.kind === "add" ? "+" : "-"} hunk ${range.startLine}-${range.endLine}${language}`;
+		return p.mode === "screen-reader" ? `hunk: ${label}` : styleText(p, "muted", `┄ ${label}`);
+	};
+	const addUnified = (index: number, entry: DiffEntry): void => {
+		const marker = entryMarker(entry);
+		const number = padStartVisible(entryLineNo(entry), lineNumberWidth);
+		const prefix =
+			p.mode === "screen-reader"
+				? `diff: ${marker} ${number}: `
+				: mode === "compact"
+					? `▌${marker} ${number} `
+					: `▌${marker} ${number} │ `;
+		const body = inlineText(index, entry);
+			const wrapped = wrapWithHangingIndent(prefix, body, w);
+			rows.push(...wrapped.map((line) => tintEntry(p, entry, line)));
+	};
+	const addSplit = (
+		leftIndex: number,
+		leftEntry: DiffEntry,
+		rightIndex?: number,
+		rightEntry?: DiffEntry,
+	): void => {
+		const paneWidth = Math.max(10, Math.floor((w - 3) / 2));
+		const gap = " │ ";
+		const blank = " ".repeat(paneWidth);
+		const oldEntry = leftEntry.kind === "remove" || leftEntry.kind === "context" ? leftEntry : undefined;
+		const newEntry = rightEntry ?? leftEntry;
+		const currentEntry = newEntry.kind === "add" || newEntry.kind === "context" ? newEntry : undefined;
+		const oldBody = oldEntry ? inlineText(leftIndex, oldEntry) : "";
+		const newBody = currentEntry ? inlineText(rightIndex ?? leftIndex, currentEntry) : "";
+		const oldMarker = oldEntry?.kind === "context" ? " " : "-";
+		const newMarker = currentEntry?.kind === "context" ? " " : "+";
+		const oldPrefix = `▌${oldMarker} ${padStartVisible(oldEntry ? String(oldEntry.oldLine) : "", oldLineNumberWidth)} │ `;
+		const newPrefix = `▌${newMarker} ${padStartVisible(currentEntry ? String(currentEntry.newLine) : "", newLineNumberWidth)} │ `;
+		const oldLines = oldEntry
+			? wrapWithHangingIndent(oldPrefix, oldBody, paneWidth).map((line) => tintEntry(p, oldEntry, line))
+			: [];
+		const newLines = currentEntry
+			? wrapWithHangingIndent(newPrefix, newBody, paneWidth).map((line) => tintEntry(p, currentEntry, line))
+			: [];
+		const rowsToRender = Math.max(oldLines.length, newLines.length, 1);
+		for (let row = 0; row < rowsToRender; row++) {
+			rows.push(`${padEndVisible(oldLines[row] ?? blank, paneWidth)}${gap}${newLines[row] ?? blank}`);
+		}
+	};
 
+	if (mode !== "summary") {
+		const consumedSplitEntries = new Set<number>();
+		for (let index = 0; index < diffData.entries.length; index++) {
+			const entry = diffData.entries[index];
+			if (
+				!entry ||
+				consumedSplitEntries.has(index) ||
+				entry.kind === "meta" ||
+				(mode === "compact" && entry.kind === "context")
+			) continue;
+			if (!expanded && shown >= DIFF_COLLAPSED_PREVIEW_LINES) break;
+
+			const pairedAddIndex = mode === "split" && entry.kind === "remove"
+				? splitPairs.get(index)
+				: undefined;
+			const pairedAdd = pairedAddIndex === undefined ? undefined : diffData.entries[pairedAddIndex];
+			const hasPair = pairedAdd?.kind === "add";
+			if (hasPair && !expanded && shown + 2 > DIFF_COLLAPSED_PREVIEW_LINES) break;
+
+			const labels = [hunkLabel(entry), hasPair ? hunkLabel(pairedAdd) : undefined];
+			for (const label of new Set(labels.filter((item): item is string => item !== undefined))) {
+				rows.push(clampLine(label, w));
+			}
+			if (hasPair && pairedAddIndex !== undefined) {
+				addSplit(index, entry, pairedAddIndex, pairedAdd);
+				consumedSplitEntries.add(pairedAddIndex);
+				shown += 2;
+			} else if (mode === "split") {
+				addSplit(index, entry);
+				shown++;
+			} else {
+				addUnified(index, entry);
+				shown++;
+			}
+		}
+	}
+	if (!expanded && renderable.length > shown) {
+		rows.push(clampLine(collapsedHint(shown, renderable.length, "diff lines", true, p), w));
+	}
 	return clampLines(rows, w);
 }
 
@@ -366,6 +680,7 @@ export class DiffBodyComponent implements Component {
 	private diffData: DiffData;
 	private theme: ThemeLike | undefined;
 	private expanded: boolean;
+	private presentation: RenderPresentation | undefined;
 	private cachedWidth: number | undefined;
 	private cachedLines: string[] | undefined;
 
@@ -374,11 +689,13 @@ export class DiffBodyComponent implements Component {
 		diffData: DiffData;
 		theme?: ThemeLike;
 		expanded?: boolean;
+		presentation?: RenderPresentation;
 	}) {
 		this.prefixLines = options.prefixLines ?? [];
 		this.diffData = options.diffData;
 		this.theme = options.theme;
 		this.expanded = options.expanded ?? true;
+		this.presentation = options.presentation;
 	}
 
 	update(options: {
@@ -386,11 +703,13 @@ export class DiffBodyComponent implements Component {
 		diffData: DiffData;
 		theme?: ThemeLike;
 		expanded?: boolean;
+		presentation?: RenderPresentation;
 	}): void {
 		this.prefixLines = options.prefixLines ?? [];
 		this.diffData = options.diffData;
 		this.theme = options.theme;
 		this.expanded = options.expanded ?? true;
+		this.presentation = options.presentation;
 		this.invalidate();
 	}
 
@@ -400,17 +719,18 @@ export class DiffBodyComponent implements Component {
 	}
 
 	render(width: number): string[] {
-		const w = normalizeWidth(width);
-		if (this.cachedLines && this.cachedWidth === w) return this.cachedLines;
-		const lines = [
-			...this.prefixLines.flatMap((line) =>
-				line.split("\n").map((part) => clampLine(part, w)),
-			),
-			...renderDiffLines(this.diffData, this.theme, w, this.expanded),
-		];
-		this.cachedLines = lines;
-		this.cachedWidth = w;
-		return lines;
+		const normalized = normalizeWidth(width);
+		if (this.cachedLines && this.cachedWidth === normalized) return this.cachedLines;
+		const p = this.presentation ?? {
+			mode: "color" as const,
+			diagnostics: false,
+			theme: asThemeLike(this.theme),
+		};
+		const lines = this.prefixLines.map((line) => clampLine(line, normalized));
+		lines.push(...renderDiffLines(this.diffData, this.theme, normalized, this.expanded, p));
+		this.cachedLines = clampLines(lines, normalized);
+		this.cachedWidth = normalized;
+		return this.cachedLines;
 	}
 }
 
@@ -421,6 +741,7 @@ function reuseOrCreateDiff(
 		diffData: DiffData;
 		theme?: ThemeLike;
 		expanded: boolean;
+		presentation?: RenderPresentation;
 	},
 ): DiffBodyComponent {
 	if (last instanceof DiffBodyComponent) {
@@ -446,19 +767,21 @@ function renderReadCall(
 	theme: ThemeLike | undefined,
 	context: RenderContextLike,
 ): Component {
+	const p = resolvePresentation(theme);
 	const record = asRecord(args) ?? {};
-	const path = typeof record.path === "string" ? sanitizeTerminalText(record.path) : "";
-	const symbol = typeof record.symbol === "string" ? sanitizeTerminalText(record.symbol) : "";
+	const path = typeof record.path === "string" ? displayText(record.path, p) : "";
+	const symbol = typeof record.symbol === "string" ? displayText(record.symbol, p) : "";
 	const cwd = context.cwd;
-	let line = toolLabel(theme, "read");
+	let line = p.mode === "screen-reader" ? "read:" : toolLabel(p.theme, "read");
 	if (path) {
 		const shown = `${shortenPath(path)}${rangeSuffix(record)}`;
-		line += ` ${linkPath(themeFg(theme, "accent", shown), path, cwd)}`;
+		const styled = styleText(p, "accent", shown);
+		line += ` ${p.mode === "color" ? linkPath(styled, path, cwd) : styled}`;
 	} else {
-		line += ` ${themeFg(theme, "toolOutput", "...")}`;
+		line += ` ${styleText(p, "toolOutput", "...")}`;
 	}
-	if (symbol) line += ` ${themeFg(theme, "dim", `symbol: ${symbol}`)}`;
-	return reuseOrCreateText(context.lastComponent, clampLine(line, context.width));
+	if (symbol) line += ` ${styleText(p, "dim", `symbol: ${symbol}`)}`;
+	return reuseOrCreateText(context.lastComponent, line);
 }
 
 function countEdits(args: Record<string, unknown> | undefined): number {
@@ -473,19 +796,19 @@ function renderEditCall(
 	theme: ThemeLike | undefined,
 	context: RenderContextLike,
 ): Component {
+	const p = resolvePresentation(theme);
 	const record = asRecord(args) ?? {};
-	const path = typeof record.path === "string" ? sanitizeTerminalText(record.path) : "";
+	const path = typeof record.path === "string" ? displayText(record.path, p) : "";
 	const n = countEdits(record);
-	let line = toolLabel(theme, "edit");
+	let line = p.mode === "screen-reader" ? "edit:" : toolLabel(p.theme, "edit");
 	if (path) {
-		line += ` ${linkPath(themeFg(theme, "accent", shortenPath(path)), path, context.cwd)}`;
+		const styled = styleText(p, "accent", shortenPath(path));
+		line += ` ${p.mode === "color" ? linkPath(styled, path, context.cwd) : styled}`;
 	} else {
-		line += ` ${themeFg(theme, "toolOutput", "...")}`;
+		line += ` ${styleText(p, "toolOutput", "...")}`;
 	}
-	if (n > 0) {
-		line += ` ${themeFg(theme, "dim", `${n} ${n === 1 ? "edit" : "edits"}`)}`;
-	}
-	return reuseOrCreateText(context.lastComponent, clampLine(line, context.width));
+	if (n > 0) line += ` ${styleText(p, "dim", `${n} ${n === 1 ? "edit" : "edits"}`)}`;
+	return reuseOrCreateText(context.lastComponent, line);
 }
 
 function renderWriteCall(
@@ -493,20 +816,20 @@ function renderWriteCall(
 	theme: ThemeLike | undefined,
 	context: RenderContextLike,
 ): Component {
+	const p = resolvePresentation(theme);
 	const record = asRecord(args) ?? {};
-	const path = typeof record.path === "string" ? sanitizeTerminalText(record.path) : "";
-	const content = typeof record.content === "string" ? record.content : undefined;
+	const path = typeof record.path === "string" ? displayText(record.path, p) : "";
+	const content = typeof record.content === "string" ? displayText(record.content, p) : undefined;
 	const lines = content === undefined ? 0 : content.split("\n").length;
-	let line = toolLabel(theme, "write");
+	let line = p.mode === "screen-reader" ? "write:" : toolLabel(p.theme, "write");
 	if (path) {
-		line += ` ${linkPath(themeFg(theme, "accent", shortenPath(path)), path, context.cwd)}`;
+		const styled = styleText(p, "accent", shortenPath(path));
+		line += ` ${p.mode === "color" ? linkPath(styled, path, context.cwd) : styled}`;
 	} else {
-		line += ` ${themeFg(theme, "toolOutput", "...")}`;
+		line += ` ${styleText(p, "toolOutput", "...")}`;
 	}
-	if (content !== undefined) {
-		line += ` ${themeFg(theme, "dim", `${lines} ${lines === 1 ? "line" : "lines"}`)}`;
-	}
-	return reuseOrCreateText(context.lastComponent, clampLine(line, context.width));
+	if (content !== undefined) line += ` ${styleText(p, "dim", `${lines} ${lines === 1 ? "line" : "lines"}`)}`;
+	return reuseOrCreateText(context.lastComponent, line);
 }
 
 function renderBashCall(
@@ -514,12 +837,15 @@ function renderBashCall(
 	theme: ThemeLike | undefined,
 	context: RenderContextLike,
 ): Component {
+	const p = resolvePresentation(theme);
 	const record = asRecord(args) ?? {};
-	const raw = typeof record.command === "string" ? sanitizeTerminalText(record.command) : "";
+	const raw = typeof record.command === "string" ? displayText(record.command, p) : "";
 	const first = raw.split("\n")[0] ?? "";
 	const command = raw.includes("\n") ? `${first} …` : first;
-	const line = `${toolLabel(theme, "bash")} ${themeFg(theme, "muted", command || "...")}`;
-	return reuseOrCreateText(context.lastComponent, clampLine(line, context.width));
+	const line = p.mode === "screen-reader"
+		? `bash: ${command || "..."}`
+		: `${toolLabel(p.theme, "bash")} ${styleText(p, "muted", command || "...")}`;
+	return reuseOrCreateText(context.lastComponent, line);
 }
 
 function renderLsCall(
@@ -527,17 +853,18 @@ function renderLsCall(
 	theme: ThemeLike | undefined,
 	context: RenderContextLike,
 ): Component {
+	const p = resolvePresentation(theme);
 	const record = asRecord(args) ?? {};
-	const path = typeof record.path === "string" ? sanitizeTerminalText(record.path) : ".";
-	const glob = typeof record.glob === "string" ? sanitizeTerminalText(record.glob) : "";
+	const path = typeof record.path === "string" ? displayText(record.path, p) : ".";
+	const glob = typeof record.glob === "string" ? displayText(record.glob, p) : "";
 	const limit = record.limit;
-	const limitText = typeof limit === "number" || typeof limit === "string" ? sanitizeTerminalText(String(limit)) : undefined;
-	let line = `${toolLabel(theme, "ls")} ${linkPath(themeFg(theme, "accent", shortenPath(path)), path, context.cwd)}`;
-	if (glob) line += ` ${themeFg(theme, "dim", `glob: ${glob}`)}`;
-	if (limitText !== undefined) {
-		line += ` ${themeFg(theme, "dim", `limit: ${limitText}`)}`;
-	}
-	return reuseOrCreateText(context.lastComponent, clampLine(line, context.width));
+	const limitText = typeof limit === "number" || typeof limit === "string" ? displayText(String(limit), p) : undefined;
+	let line = p.mode === "screen-reader" ? "ls:" : toolLabel(p.theme, "ls");
+	const styled = styleText(p, "accent", shortenPath(path));
+	line += ` ${p.mode === "color" ? linkPath(styled, path, context.cwd) : styled}`;
+	if (glob) line += ` ${styleText(p, "dim", `glob: ${glob}`)}`;
+	if (limitText !== undefined) line += ` ${styleText(p, "dim", `limit: ${limitText}`)}`;
+	return reuseOrCreateText(context.lastComponent, line);
 }
 
 // ─── result renderers ────────────────────────────────────────────
@@ -549,25 +876,20 @@ function warningBadges(value: unknown): string[] {
 
 function renderReadResult(
 	result: ToolResultLike,
-	options: { expanded?: boolean; isPartial?: boolean },
+	options: RenderOptionsLike,
 	theme: ThemeLike | undefined,
 	context: RenderContextLike,
 ): Component {
-	const width = context.width ?? (options as { width?: number }).width;
+	const p = resolvePresentation(theme);
 	if (context.isPartial || options.isPartial) {
-		return new Text(clampLine(summaryLine("pending read"), width), 0, 0);
+		return new Text(summaryLine("pending read", p, "read"), 0, 0);
 	}
 
-	const body = textOf(result);
+	const body = textOf(result, p);
 	if (context.isError || result.isError) {
 		const first = body.split("\n")[0] || "Error";
 		const expanded = isExpanded(options, context);
-		const msg = expanded && body ? body : first;
-		return new Text(
-			clampLines(summaryLine(msg).split("\n"), width).join("\n"),
-			0,
-			0,
-		);
+		return new Text(summaryLine(expanded && body ? body : first, p, "read"), 0, 0);
 	}
 
 	const details = asRecord(result.details);
@@ -593,62 +915,61 @@ function renderReadResult(
 				: `loaded ${visible} ${word}`,
 		);
 		const symbol = asRecord(ptc.symbol);
-		if (symbol && typeof symbol.name === "string") badges.push(`symbol: ${sanitizeTerminalText(symbol.name)}`);
-		else if (typeof ptc.symbol === "string") badges.push(`symbol: ${sanitizeTerminalText(ptc.symbol)}`);
+		if (symbol && typeof symbol.name === "string") badges.push(`symbol: ${displayText(symbol.name, p)}`);
+		else if (typeof ptc.symbol === "string") badges.push(`symbol: ${displayText(ptc.symbol, p)}`);
 		if (ptc.map) badges.push("map");
 		badges.push(...warningBadges(ptc.warnings));
 	} else {
-		const n = body.length === 0 ? 0 : body.split("\n").length;
-		badges.push(`loaded ${n} ${n === 1 ? "line" : "lines"}`);
+		const count = body.length === 0 ? 0 : body.split("\n").length;
+		badges.push(`loaded ${count} ${count === 1 ? "line" : "lines"}`);
 	}
 
-	const summary = summaryLine(badges.join(" • "), Boolean(body) && !expanded);
+	const summary = summaryLine(badges.join(" • "), p, "read");
 	if (expanded && body) {
-		const lines = [summary, ...wrapHashlines(body, normalizeWidth(width))];
-		return new Text(clampLines(lines, width).join("\n"), 0, 0);
+		return reuseOrCreateWidthAware(context.lastComponent, (width) => [
+			summary,
+			...wrapHashlines(body, width, p),
+		]);
 	}
-
-
-	return new Text(clampLine(summary, width), 0, 0);
+	if (body) {
+		const lineCount = body.split("\n").length;
+		return new Text([summary, collapsedHint(0, lineCount, "lines", true, p)].join("\n"), 0, 0);
+	}
+	return new Text(summary, 0, 0);
 }
 
 function renderEditResult(
 	result: ToolResultLike,
-	options: { expanded?: boolean; isPartial?: boolean },
+	options: RenderOptionsLike,
 	theme: ThemeLike | undefined,
 	context: RenderContextLike,
 ): Component {
-	const width = context.width ?? (options as { width?: number }).width;
+	const p = resolvePresentation(theme);
 	if (context.isPartial || options.isPartial) {
-		return new Text(clampLine(summaryLine("pending edit"), width), 0, 0);
+		return new Text(summaryLine("pending edit", p, "edit"), 0, 0);
 	}
 
-	const body = textOf(result);
+	const body = textOf(result, p);
 	const details = asRecord(result.details) ?? {};
 	const ptc = asRecord(details.ptcValue);
-	// 只跟 Pi expanded；视觉策略完全由本扩展管理
 	const expanded = isExpanded(options, context);
 	const isError = Boolean(context.isError || result.isError || ptc?.ok === false);
 	const noopEdits = Array.isArray(ptc?.noopEdits) ? ptc.noopEdits : [];
 	const warnings = warningBadges(ptc?.warnings);
 	const semantic = asRecord(ptc?.semanticSummary);
 	const classification =
-		typeof semantic?.classification === "string" ? sanitizeTerminalText(semantic.classification) : undefined;
+		typeof semantic?.classification === "string" ? displayText(semantic.classification, p) : undefined;
 
 	if (noopEdits.length > 0 && !isError) {
-		const lines = [summaryLine("no-op")];
-		if (expanded && body) lines.push(themeFg(theme, "dim", body));
-		return new Text(clampLines(lines, width).join("\n"), 0, 0);
+		const lines = [summaryLine("no-op", p, "edit")];
+		if (expanded && body) lines.push(styleText(p, "dim", body));
+		return new Text(lines.join("\n"), 0, 0);
 	}
 
 	if (isError) {
 		const first = body.split("\n")[0] || "edit failed";
 		const msg = expanded && body ? body : first;
-		return new Text(
-			clampLines(summaryLine(msg).split("\n"), width).join("\n"),
-			0,
-			0,
-		);
+		return new Text(summaryLine(msg, p, "edit"), 0, 0);
 	}
 
 	const diffData = isDiffData(details.diffData)
@@ -660,47 +981,41 @@ function renderEditResult(
 	const badges = [`edited +${stats.added} -${stats.removed}`];
 	if (classification) badges.push(classification);
 	badges.push(...warnings);
-	const summary = summaryLine(badges.join(" • "), Boolean(diffData) && !expanded);
+	const summary = summaryLine(badges.join(" • "), p, "edit");
 
-	// 折叠态也给一小段 diff 预览
 	if (diffData) {
 		return reuseOrCreateDiff(context.lastComponent, {
 			prefixLines: [summary],
 			diffData,
-			theme,
+			theme: p.theme,
 			expanded,
+			presentation: p,
 		});
 	}
 
-	return new Text(clampLine(summary, width), 0, 0);
+	return new Text(summary, 0, 0);
 }
 
 function renderWriteResult(
 	result: ToolResultLike,
-	options: { expanded?: boolean; isPartial?: boolean },
+	options: RenderOptionsLike,
 	theme: ThemeLike | undefined,
 	context: RenderContextLike,
 ): Component {
-	const width = context.width ?? (options as { width?: number }).width;
+	const p = resolvePresentation(theme);
 	if (context.isPartial || options.isPartial) {
-		return new Text(clampLine(summaryLine("pending write"), width), 0, 0);
+		return new Text(summaryLine("pending write", p, "write"), 0, 0);
 	}
 
-	const body = textOf(result);
+	const body = textOf(result, p);
 	const details = asRecord(result.details) ?? {};
 	const ptc = asRecord(details.ptcValue);
-	// write 同样只跟 Ctrl+O / context.expanded
 	const expanded = isExpanded(options, context);
 	const isError = Boolean(context.isError || result.isError || ptc?.ok === false);
 
 	if (isError) {
 		const first = body.split("\n")[0] || "write failed";
-		const msg = expanded && body ? body : first;
-		return new Text(
-			clampLines(summaryLine(msg).split("\n"), width).join("\n"),
-			0,
-			0,
-		);
+		return new Text(summaryLine(expanded && body ? body : first, p, "write"), 0, 0);
 	}
 
 	const state = details.writeState === "overwritten" ? "overwritten" : "created";
@@ -715,30 +1030,26 @@ function renderWriteResult(
 			...(hasContent ? [`${lineCount} ${lineCount === 1 ? "line" : "lines"}`] : []),
 			...warnings,
 		];
-		const summary = summaryLine(badges.join(" • "), hasContent && !expanded);
-		// 默认只摘要；展开才给有限内容预览
+		const summary = summaryLine(badges.join(" • "), p, "write");
 		if (!expanded || !hasContent) {
-			return new Text(clampLine(summary, width), 0, 0);
+			const lines = hasContent && !expanded
+				? [summary, collapsedHint(0, lineCount, "lines", true, p)]
+				: [summary];
+			return new Text(lines.join("\n"), 0, 0);
 		}
 
 		const rawLines = ptcLines.flatMap((item) => {
 			const row = asRecord(item);
-			if (typeof row?.raw === "string") return [sanitizeTerminalText(row.raw)];
-			return typeof item === "string" ? [sanitizeTerminalText(item)] : [];
+			if (typeof row?.raw === "string") return [displayText(row.raw, p)];
+			return typeof item === "string" ? [displayText(item, p)] : [];
 		});
 		const shown = rawLines.slice(0, CONTENT_PREVIEW_MAX_LINES);
 		const hidden = rawLines.length - shown.length;
-		const contentLines = wrapHashlines(shown.join("\n"), normalizeWidth(width)).map((line) =>
-			themeFg(theme, "toolOutput", line),
-		);
-		const out = [
+		return reuseOrCreateWidthAware(context.lastComponent, (width) => [
 			summary,
-			...contentLines,
-			...(hidden > 0
-				? [`… (${hidden} more ${hidden === 1 ? "line" : "lines"}${EXPAND_HINT})`]
-				: []),
-		];
-		return new Text(clampLines(out, width).join("\n"), 0, 0);
+			...wrapHashlines(shown.join("\n"), width, p),
+			...(hidden > 0 ? [collapsedHint(shown.length, lineCount, "lines", false, p)] : []),
+		]);
 	}
 
 	const diffData = isDiffData(details.diffData)
@@ -748,128 +1059,181 @@ function renderWriteResult(
 			: undefined;
 	const badges = [state, ...warnings];
 	if (diffData) badges.push(`+${diffData.stats.added} -${diffData.stats.removed}`);
-	const summary = summaryLine(badges.join(" • "), Boolean(diffData) && !expanded);
+	const summary = summaryLine(badges.join(" • "), p, "write");
 
 	if (diffData) {
 		return reuseOrCreateDiff(context.lastComponent, {
 			prefixLines: [summary],
 			diffData,
-			theme,
+			theme: p.theme,
 			expanded,
+			presentation: p,
 		});
 	}
 
-	return new Text(clampLine(summary, width), 0, 0);
+	return new Text(summary, 0, 0);
 }
 
 function renderBashResult(
 	result: ToolResultLike,
-	options: { expanded?: boolean; isPartial?: boolean },
+	options: RenderOptionsLike,
 	theme: ThemeLike | undefined,
 	context: RenderContextLike,
 ): Component {
-	const width = context.width ?? (options as { width?: number }).width;
+	const p = resolvePresentation(theme);
 	if (context.isPartial || options.isPartial) {
-		return new Text(clampLine(summaryLine("running"), width), 0, 0);
+		return new Text(summaryLine("running", p, "bash"), 0, 0);
 	}
 
-	const body = textOf(result);
+	const body = textOf(result, p);
 	const expanded = isExpanded(options, context);
+	const renderOutput = (lines: string[], width: number): string[] => {
+		const prefix = p.mode === "screen-reader" ? "output: " : styleText(p, "dim", "│ ");
+		return lines.flatMap((line) =>
+			wrapWithHangingIndent(prefix, styleText(p, "toolOutput", line), width),
+		);
+	};
 
 	if (context.isError || result.isError) {
-		const first = body.split("\n")[0] || "command failed";
-		const msg = expanded && body ? body : first;
-		return new Text(
-			clampLines(
-				[summaryLine(msg), ...(expanded && body.includes("\n") ? body.split("\n").slice(1) : [])],
-				width,
-			).join("\n"),
-			0,
-			0,
-		);
+		const [first = "command failed", ...rest] = body.split("\n");
+		const summary = summaryLine(first || "command failed", p, "bash");
+		if (!expanded || rest.length === 0) return new Text(summary, 0, 0);
+		return reuseOrCreateWidthAware(context.lastComponent, (width) => [
+			summary,
+			...renderOutput(rest, width),
+		]);
 	}
 
 	if (!body.trim()) {
-		return new Text(clampLine(summaryLine("command completed (no output)"), width), 0, 0);
+		return new Text(summaryLine("command completed (no output)", p, "bash"), 0, 0);
 	}
 
 	const lines = body.replace(/\n+$/, "").split("\n");
 	const lineCount = lines.length;
-	const short =
-		lineCount <= BASH_SHORT_MAX_LINES && body.length <= BASH_SHORT_MAX_CHARS;
 	const summary = summaryLine(
 		`${lineCount} ${lineCount === 1 ? "line" : "lines"} returned`,
-		!expanded && !short,
+		p,
+		"bash",
 	);
-
-	// 短输出整段；长输出折叠态先预览再折叠；expanded 才全文
-	if (expanded || short) {
-		return new Text(clampLines([summary, ...lines], width).join("\n"), 0, 0);
-	}
-
-	const preview = lines.slice(0, BASH_COLLAPSED_PREVIEW_LINES);
-	const hidden = lineCount - preview.length;
-	const out = [
+	const short = lineCount <= BASH_SHORT_MAX_LINES && body.length <= BASH_SHORT_MAX_CHARS;
+	const visible = expanded || short ? lines : lines.slice(0, BASH_COLLAPSED_PREVIEW_LINES);
+	return reuseOrCreateWidthAware(context.lastComponent, (width) => [
 		summary,
-		...preview,
-		...(hidden > 0
-			? [`… (${hidden} more ${hidden === 1 ? "line" : "lines"}${EXPAND_HINT})`]
+		...renderOutput(visible, width),
+		...(!expanded && !short && visible.length < lineCount
+			? [collapsedHint(visible.length, lineCount, "lines", true, p)]
 			: []),
-	];
-	return new Text(clampLines(out, width).join("\n"), 0, 0);
+	]);
 }
 
-function lsEntryLines(entries: unknown[], theme: ThemeLike | undefined): string[] {
-	return entries.flatMap((item) => {
+function lsEntryLines(
+	entries: unknown[],
+	presentation: RenderPresentation,
+	width: number,
+	maxEntries?: number,
+): { lines: string[]; shown: number } {
+	const items = entries.flatMap((item) => {
 		const entry = asRecord(item);
 		if (typeof entry?.name !== "string") return [];
-		const type = entry.type === "dir" ? "▸" : "·";
-		const suffix = entry.type === "dir" ? "/" : "";
-		return [themeFg(theme, entry.type === "dir" ? "accent" : "toolOutput", `${type} ${sanitizeTerminalText(entry.name)}${suffix}`)];
+		const name = displayText(entry.name, presentation);
+		const isDirectory = entry.type === "dir";
+		return [{
+			text: `${isDirectory ? "▸" : "·"} ${name}${isDirectory ? "/" : ""}`,
+			color: isDirectory ? "accent" : "toolOutput",
+		}];
 	});
+	const visibleItems = maxEntries === undefined
+		? items
+		: items.slice(0, Math.max(0, Math.floor(maxEntries)));
+	if (presentation.mode === "screen-reader") {
+		return {
+			lines: visibleItems.map((item) => `entry: ${item.text}`),
+			shown: visibleItems.length,
+		};
+	}
+	if (visibleItems.length < 2 || width < 100) {
+		return {
+			lines: visibleItems.map((item) => styleText(presentation, item.color, clampLine(item.text, width))),
+			shown: visibleItems.length,
+		};
+	}
+
+	const gap = 2;
+	const columnWidth = Math.max(1, Math.floor((width - gap) / 2));
+	const rows = Math.ceil(visibleItems.length / 2);
+	const cells = visibleItems.map((item) => styleText(presentation, item.color, truncateToWidth(item.text, columnWidth, "…")));
+	const lines: string[] = [];
+	for (let row = 0; row < rows; row++) {
+		const left = cells[row] ?? "";
+		const right = cells[row + rows];
+		lines.push(right === undefined ? left : `${padEndVisible(left, columnWidth)}${" ".repeat(gap)}${right}`);
+	}
+	return { lines, shown: visibleItems.length };
 }
 
 function renderLsResult(
 	result: ToolResultLike,
-	options: { expanded?: boolean; isPartial?: boolean },
+	options: RenderOptionsLike,
 	theme: ThemeLike | undefined,
 	context: RenderContextLike,
 ): Component {
-	const width = context.width ?? (options as { width?: number }).width;
+	const p = resolvePresentation(theme);
 	if (context.isPartial || options.isPartial) {
-		return new Text(clampLine(summaryLine("listing"), width), 0, 0);
+		return new Text(summaryLine("listing", p, "ls"), 0, 0);
 	}
 
-	const body = textOf(result);
+	const body = textOf(result, p);
 	const expanded = isExpanded(options, context);
 	if (context.isError || result.isError) {
 		const first = body.split("\n")[0] || "ls failed";
-		const message = expanded && body ? body : first;
-		return new Text(clampLines(summaryLine(message).split("\n"), width).join("\n"), 0, 0);
+		return new Text(summaryLine(expanded && body ? body : first, p, "ls"), 0, 0);
 	}
 
 	const details = asRecord(result.details);
 	const ptc = asRecord(details?.ptcValue);
 	const entries = Array.isArray(ptc?.entries) ? ptc.entries : [];
 	const outputLines = body ? body.split("\n").filter((line) => line.length > 0) : [];
-	const total = typeof ptc?.totalEntries === "number" ? ptc.totalEntries : outputLines.length;
+	const total = typeof ptc?.totalEntries === "number"
+		? ptc.totalEntries
+		: entries.length > 0
+			? entries.length
+			: outputLines.length;
 	const truncated = Boolean(ptc?.truncated);
 	if (total === 0 && entries.length === 0) {
-		return new Text(clampLine(summaryLine("empty directory"), width), 0, 0);
+		return new Text(summaryLine("empty directory", p, "ls"), 0, 0);
 	}
 
-	const summary = summaryLine(`${total} ${total === 1 ? "entry" : "entries"} returned`);
-	const lines = entries.length > 0 ? lsEntryLines(entries, theme) : outputLines;
-	const visible = expanded ? lines : lines.slice(0, LS_COLLAPSED_PREVIEW_ENTRIES);
-	const hidden = Math.max(0, total - visible.length);
-	const out = [
-		summary,
-		...visible,
-		...(hidden > 0 || (!expanded && truncated)
-			? [`… (${hidden > 0 ? `${hidden} more` : "more"} ${hidden === 1 ? "entry" : "entries"}${expanded ? "" : EXPAND_HINT})`]
-			: []),
-	];
-	return new Text(clampLines(out, width).join("\n"), 0, 0);
+	const summary = summaryLine(`${total} ${total === 1 ? "entry" : "entries"} returned`, p, "ls");
+	return reuseOrCreateWidthAware(context.lastComponent, (width) => {
+		let lines: string[];
+		let shown: number;
+		if (entries.length > 0) {
+			const layout = lsEntryLines(
+				entries,
+				p,
+				width,
+				expanded ? undefined : LS_COLLAPSED_PREVIEW_ENTRIES,
+			);
+			lines = layout.lines;
+			shown = layout.shown;
+		} else {
+			const visibleOutput = expanded
+				? outputLines
+				: outputLines.slice(0, LS_COLLAPSED_PREVIEW_ENTRIES);
+			lines = visibleOutput.map((line) => p.mode === "screen-reader"
+				? `entry: ${line}`
+				: styleText(p, "toolOutput", line));
+			shown = visibleOutput.length;
+		}
+		const hidden = Math.max(0, total - shown);
+		return [
+			summary,
+			...lines,
+			...(hidden > 0 || (!expanded && truncated)
+				? [collapsedHint(shown, total, "entries", !expanded, p)]
+				: []),
+		];
+	});
 }
 
 // ─── patch ───────────────────────────────────────────────────────
