@@ -28,7 +28,7 @@ type AssistantMessageLike = {
  * - User request: tree rails ├─ / │ / ╰─
  */
 const MAX_BODY_WIDTH = 100;
-const MAX_PREVIEW_LINES = 16;
+const MAX_PREVIEW_LINES = 16; // 流式思考只保留最新窗口，避免固定在开头。
 const BODY_TINT: RGB = [216, 202, 220]; // soft petal-lilac body
 const HIDDEN_LABEL_PLAIN = "✦ Thought";
 const THINKING_PREFIX_PATTERN = /^\s*Thinking\s*[:：]\s*/i;
@@ -184,15 +184,11 @@ class ThinkingTrailComponent implements Component {
 		const header = truncateToWidth(`  ${mark}${label}`, width, "");
 
 		const body: string[] = [];
-		let currentStep = 0;
-		let emitted = 0;
-		let truncated = false;
+		const previewRows = rows.slice(-MAX_PREVIEW_LINES);
+		const hiddenLineCount = rows.length - previewRows.length;
+		let currentStep = stepCount - previewRows.filter((row) => row.step).length;
 
-		for (const { line, step } of rows) {
-			if (emitted >= MAX_PREVIEW_LINES) {
-				truncated = true;
-				break;
-			}
+		for (const { line, step } of previewRows) {
 			if (step) currentStep += 1;
 			const isLastStep = currentStep === stepCount;
 			const branchText = step
@@ -210,14 +206,11 @@ class ThinkingTrailComponent implements Component {
 			// 所有正文统一使用柔和文字色，避免第一行和后续行走不同的 ANSI 样式路径。
 			const bodyText = softBody(theme, cleanedPlain);
 			body.push(truncateToWidth(`  ${branch}${marker}${bodyText}`, width, ""));
-			emitted += 1;
 		}
 
-		if (truncated) {
-			const more = Math.max(0, rows.length - MAX_PREVIEW_LINES);
-			const hint = softBody(theme, `… +${more} more · Ctrl+T collapses trail`);
-			const endBranch = gradientBranch("╰─ ");
-			body.push(truncateToWidth(`  ${endBranch}${hint}`, width, ""));
+		if (hiddenLineCount > 0) {
+			const hint = softBody(theme, `… +${hiddenLineCount} more · Ctrl+T collapses trail`);
+			body.unshift(truncateToWidth(`  ${gradientBranch("│  ")}  ${hint}`, width, ""));
 		}
 
 		// No leading blank — AssistantMessage already inserts Spacer(1) before content.
