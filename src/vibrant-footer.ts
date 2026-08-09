@@ -9,19 +9,18 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { collectBlackholeStatus } from "./footer/blackhole.ts";
 import { renderFooter } from "./footer/render.ts";
-import { registerFooterCommand, readFooterSettings } from "./footer/settings.ts";
-import { getIcons, type FooterSnapshot } from "./footer/types.ts";
-import {
-	collectContextUsage,
-	collectModelSnapshot,
-	SessionUsageCollector,
-} from "./footer/usage.ts";
+import { registerFooterCommand } from "./footer/settings.ts";
+import { getIcons, type FooterSettings, type FooterSnapshot } from "./footer/types.ts";
+import { collectModelSnapshot, SessionUsageCollector } from "./footer/usage.ts";
 import type { SubscriptionUsageSource } from "./footer/subscription-usage.ts";
 
 const REFRESH_INTERVAL_MS = 30_000;
 
-export default function vibrantFooter(pi: ExtensionAPI, subscriptionUsage?: SubscriptionUsageSource): void {
-	const settings = readFooterSettings();
+export default function vibrantFooter(
+	pi: ExtensionAPI,
+	subscriptionUsage: SubscriptionUsageSource | undefined,
+	settings: FooterSettings,
+): void {
 	const usageCollector = new SessionUsageCollector();
 	let enabled = true;
 	let sessionStartMs = Date.now();
@@ -39,7 +38,7 @@ export default function vibrantFooter(pi: ExtensionAPI, subscriptionUsage?: Subs
 		const previous = snapshot;
 		const refreshUsage = previous === undefined || options.usage === true;
 		const usage = refreshUsage ? usageCollector.collect(ctx) : previous.usage;
-		// O/R/P/C 与 context 一样读取当前 branch；这里不复用旧指标。
+		// O/R/P/C 每次读取当前 branch；这里不复用旧指标。
 		const blackhole = settings.blackhole ? collectBlackholeStatus(ctx) : null;
 
 		snapshot = {
@@ -47,7 +46,6 @@ export default function vibrantFooter(pi: ExtensionAPI, subscriptionUsage?: Subs
 			sessionName: ctx.sessionManager.getSessionName(),
 			sessionStartMs,
 			nowMs: Date.now(),
-			context: collectContextUsage(ctx),
 			model: collectModelSnapshot(ctx),
 			thinkingLevel: pi.getThinkingLevel(),
 			usage,

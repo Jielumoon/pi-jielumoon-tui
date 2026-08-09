@@ -10,12 +10,15 @@ const stripAnsi = (text: string): string => text.replace(/\x1b\[[0-9;]*m/g, "");
 type Handler = (event: unknown, ctx: ExtensionContext) => unknown;
 type EntryRenderer = (entry: { data?: { elapsedMs?: unknown } }, options: unknown, theme: Theme) => Component;
 
-test("working extension keeps native spinner frames and records elapsed transcript", () => {
+test("working extension keeps one animation source and records only long elapsed transcripts", () => {
 	const handlers = new Map<string, Handler[]>();
 	const indicators: Array<{ frames?: string[]; intervalMs?: number } | undefined> = [];
 	const messages: Array<string | undefined> = [];
 	const entries: Array<{ type: string; data: unknown }> = [];
 	let renderer: EntryRenderer | undefined;
+	const originalNow = Date.now;
+	let now = 10_000;
+	Date.now = () => now;
 
 	const pi = {
 		on(event: string, handler: Handler) {
@@ -40,23 +43,32 @@ test("working extension keeps native spinner frames and records elapsed transcri
 		for (const handler of handlers.get(name) ?? []) handler({ type: name }, ctx);
 	};
 
-	installWorking(pi);
-	emit("session_start");
-	const indicator = indicators.at(-1);
-	assert.equal(indicator?.intervalMs, 80);
-	assert.deepEqual(indicator?.frames?.map(stripAnsi), BRAILLE_FRAMES);
-
-	emit("agent_start");
 	try {
-		assert.match(stripAnsi(messages.at(-1) ?? ""), /^Working \(\d+s · esc to interrupt\)$/);
-	} finally {
-		emit("agent_settled");
-	}
+		installWorking(pi);
+		emit("session_start");
+		const indicator = indicators.at(-1);
+		assert.equal(indicator?.intervalMs, 80);
+		assert.deepEqual(indicator?.frames?.map(stripAnsi), BRAILLE_FRAMES);
 
-	assert.equal(messages.at(-1), undefined);
-	assert.equal(entries.length, 1);
-	assert.equal(entries[0]?.type, "pi-jielumoon-elapsed");
-	assert.ok(renderer);
-	const transcript = renderer({ data: { elapsedMs: 7_000 } }, {}, ctx.ui.theme).render(80).join("\n");
-	assert.equal(stripAnsi(transcript).trimEnd(), "  Worked for 7s");
+		emit("agent_start");
+		assert.match(stripAnsi(messages.at(-1) ?? ""), /^Working · 0s$/);
+		assert.doesNotMatch(stripAnsi(messages.at(-1) ?? ""), /esc|interrupt/);
+		now += 7_000;
+		emit("agent_settled");
+		assert.equal(messages.at(-1), undefined);
+		assert.equal(entries.length, 1);
+
+		emit("agent_start");
+		now += 2_000;
+		emit("agent_settled");
+		assert.equal(entries.length, 1);
+
+		assert.equal(entries[0]?.type, "pi-jielumoon-elapsed");
+		assert.ok(renderer);
+		const transcript = renderer({ data: { elapsedMs: 7_000 } }, {}, ctx.ui.theme).render(80).join("\n");
+		assert.equal(stripAnsi(transcript).trimEnd(), "  · 7s");
+	} finally {
+		emit("session_shutdown");
+		Date.now = originalNow;
+	}
 });

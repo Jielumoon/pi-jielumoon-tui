@@ -1,6 +1,6 @@
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { type ExtensionContext, type SessionEntry } from "@earendil-works/pi-coding-agent";
-import type { ContextUsageSnapshot, ModelSnapshot, UsageTotals } from "./types.ts";
+import type { ModelSnapshot, UsageTotals } from "./types.ts";
 
 type UsageCounters = Omit<UsageTotals, "cacheHitRate">;
 
@@ -59,17 +59,6 @@ export class SessionUsageCollector {
 
 export function collectUsage(ctx: ExtensionContext): UsageTotals {
 	return new SessionUsageCollector().collect(ctx);
-}
-
-export function collectContextUsage(ctx: ExtensionContext): ContextUsageSnapshot {
-	const usage = ctx.getContextUsage();
-	const contextWindow = usage?.contextWindow ?? ctx.model?.contextWindow ?? 0;
-	const percent = typeof usage?.percent === "number" ? usage.percent : null;
-
-	return {
-		percent,
-		contextWindow: Math.max(0, contextWindow),
-	};
 }
 
 export function collectModelSnapshot(ctx: ExtensionContext): ModelSnapshot | null {

@@ -18,7 +18,6 @@ export type IconSet = {
 	cacheWrite: string;
 	cacheHit: string;
 	cost: string;
-	context: string;
 	time: string;
 	model: string;
 	thinking: string;
@@ -41,7 +40,6 @@ const NERD_ICONS: IconSet = {
 	cacheWrite: "\u{f02fa}", // nf-md-import
 	cacheHit: "\u{f04fe}", // nf-md-target
 	cost: "\u{f01c8}", // nf-md-diamond_stone
-	context: "\u{f029a}", // nf-md-gauge
 	time: "\u{f051f}", // nf-md-timer_sand
 	model: "\u{f0768}", // nf-md-atom
 	thinking: "\u{f09d1}", // nf-md-brain
@@ -58,7 +56,6 @@ const UNICODE_ICONS: IconSet = {
 	cacheWrite: "↻",
 	cacheHit: "◎",
 	cost: "◈",
-	context: "▣",
 	time: "◷",
 	model: "π",
 	thinking: "◆",
@@ -170,11 +167,6 @@ export type BlackholeCooldown = {
 	remainingMs: number;
 };
 
-export type ContextUsageSnapshot = {
-	percent: number | null;
-	contextWindow: number;
-};
-
 export type ModelSnapshot = {
 	provider: string;
 	id: string;
@@ -188,7 +180,6 @@ export type FooterSnapshot = {
 	sessionName: string | undefined;
 	sessionStartMs: number;
 	nowMs: number;
-	context: ContextUsageSnapshot;
 	model: ModelSnapshot | null;
 	thinkingLevel: string;
 	usage: UsageTotals;

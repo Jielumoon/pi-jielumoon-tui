@@ -1,4 +1,4 @@
-/** pi-ui 风格的工作状态渐变、重试/压缩状态和耗时 transcript。 */
+/** Sakura 活动 spinner、重试/压缩状态和长任务耗时 transcript。 */
 
 import type {
 	ExtensionAPI,
@@ -7,19 +7,14 @@ import type {
 	WorkingIndicatorOptions,
 } from "@earendil-works/pi-coding-agent";
 import { Loader, Text } from "@earendil-works/pi-tui";
-import { renderSakuraGradient } from "./gradient";
+import { SAKURA_SPINNER_FRAMES } from "./gradient";
 import { installPrototypePatch } from "./prototype-patch-registry";
 
-const WORKING_UPDATE_INTERVAL_MS = 180;
+const WORKING_UPDATE_INTERVAL_MS = 1000;
 const SPINNER_INTERVAL_MS = 80;
-const SHIMMER_PERIOD_MS = 2800;
+const MIN_ELAPSED_TRANSCRIPT_MS = 5000;
 const ELAPSED_ENTRY_TYPE = "pi-jielumoon-elapsed";
-const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"] as const;
-const MACARON_SPINNER_FRAMES = SPINNER_FRAMES.map((frame) => renderSakuraGradient(frame));
 
-function shimmerPhase(now = Date.now()): number {
-	return (((now % SHIMMER_PERIOD_MS) + SHIMMER_PERIOD_MS) % SHIMMER_PERIOD_MS) / SHIMMER_PERIOD_MS;
-}
 
 function formatElapsed(milliseconds: number): string {
 	const totalSeconds = Math.max(0, Math.floor(milliseconds / 1000));
@@ -30,15 +25,13 @@ function formatElapsed(milliseconds: number): string {
 
 function indicator(): WorkingIndicatorOptions {
 	return {
-		frames: MACARON_SPINNER_FRAMES,
+		frames: SAKURA_SPINNER_FRAMES,
 		intervalMs: SPINNER_INTERVAL_MS,
 	};
 }
 
-function workingMessage(theme: Theme, elapsedMs: number): string {
-	const word = renderSakuraGradient("Working", shimmerPhase());
-	const suffix = theme.fg("dim", ` (${formatElapsed(elapsedMs)} · esc to interrupt)`);
-	return `${word}${suffix}`;
+export function renderWorkingMessage(theme: Theme, elapsedMs: number): string {
+	return `${theme.fg("text", "Working")}${theme.fg("dim", ` · ${formatElapsed(elapsedMs)}`)}`;
 }
 
 interface StatusLoaderState {
@@ -83,9 +76,8 @@ function installStatusGradients(): void {
 
 				const tick = spinnerTicks.get(receiver as object) ?? 0;
 				spinnerTicks.set(receiver as object, tick + 1);
-				const phase = shimmerPhase();
-				const spinner = MACARON_SPINNER_FRAMES[tick % MACARON_SPINNER_FRAMES.length] ?? "";
-				loader.setText(`${spinner} ${renderSakuraGradient(message, phase)}`);
+				const spinner = SAKURA_SPINNER_FRAMES[tick % SAKURA_SPINNER_FRAMES.length] ?? "";
+				loader.setText(`${spinner} ${message}`);
 				loader.ui?.requestRender?.();
 				return undefined;
 			},
@@ -109,12 +101,12 @@ export default function installWorking(pi: ExtensionAPI): void {
 
 	const render = (ctx: ExtensionContext) => {
 		if (startedAt === undefined) return;
-		ctx.ui.setWorkingMessage(workingMessage(ctx.ui.theme, Date.now() - startedAt));
+		ctx.ui.setWorkingMessage(renderWorkingMessage(ctx.ui.theme, Date.now() - startedAt));
 	};
 
 	pi.registerEntryRenderer<ElapsedEntryData>(ELAPSED_ENTRY_TYPE, (entry, _options, theme) => {
 		const elapsedMs = typeof entry.data?.elapsedMs === "number" ? entry.data.elapsedMs : 0;
-		return new Text(theme.fg("dim", `  Worked for ${formatElapsed(elapsedMs)}`), 0, 0);
+		return new Text(theme.fg("dim", `  · ${formatElapsed(elapsedMs)}`), 0, 0);
 	});
 
 	pi.on("session_start", (_event, ctx) => {
@@ -137,7 +129,9 @@ export default function installWorking(pi: ExtensionAPI): void {
 		const elapsedMs = startedAt === undefined ? undefined : Date.now() - startedAt;
 		startedAt = undefined;
 		if (ctx.mode !== "tui") return;
-		if (elapsedMs !== undefined) pi.appendEntry(ELAPSED_ENTRY_TYPE, { elapsedMs });
+		if (elapsedMs !== undefined && elapsedMs >= MIN_ELAPSED_TRANSCRIPT_MS) {
+			pi.appendEntry(ELAPSED_ENTRY_TYPE, { elapsedMs });
+		}
 		ctx.ui.setWorkingMessage();
 	});
 

@@ -7,7 +7,6 @@ import {
 } from "./subscription-usage.ts";
 import {
 	cacheTone,
-	contextTone,
 	formatCwd,
 	formatDuration,
 	formatTokens,
@@ -30,25 +29,50 @@ import type {
 function renderPathLine(
 	theme: FooterTheme,
 	snapshot: FooterSnapshot,
+	settings: FooterSettings,
 	renderData: FooterRenderData,
 	icons: IconSet,
 	width: number,
 ): string {
-	const pathMode = width < 60 ? "base" : width < 100 ? "abbrev" : "full";
-	const path = formatCwd(snapshot.cwd, process.env.HOME || process.env.USERPROFILE, pathMode);
+	const separator = softSeparator(theme);
+	const thinking = settings.thinking && snapshot.model?.reasoning ? thinkingStyle(snapshot.thinkingLevel) : null;
+	const model = settings.model && snapshot.model
+		? theme.bold(theme.fg("accent", `${icons.model} ${snapshot.model.id}`))
+		: null;
+	const provider = settings.provider && snapshot.model ? theme.fg("muted", snapshot.model.provider) : null;
+	const thinkingLabel = thinking ? theme.fg(thinking.color, `${icons.thinking} ${thinking.label}`) : null;
+	const rightCandidates = [
+		joinParts([provider, model, thinkingLabel], separator),
+		joinParts([model, thinkingLabel], separator),
+		model ?? thinkingLabel ?? "",
+	].filter(Boolean);
+	const rightBudget = settings.path ? Math.max(10, Math.floor(width * (width >= 80 ? 0.48 : 0.42))) : width;
+	const right = rightCandidates.find((candidate) => visibleWidth(candidate) <= rightBudget)
+		?? truncateToWidth(rightCandidates.at(-1) ?? "", rightBudget, theme.fg("dim", "…"));
+	const rightWidth = visibleWidth(right);
+	const leftBudget = rightWidth > 0 ? Math.max(0, width - rightWidth - 2) : width;
 
-	const line = joinParts(
-		[
-			segment(theme, icons.path, "mdLink", path, "text"),
-			renderData.branch ? segment(theme, icons.branch, "mdQuote", renderData.branch, "thinkingText") : null,
-			snapshot.sessionName
-				? segment(theme, icons.session, "customMessageLabel", snapshot.sessionName, "thinkingText")
-				: null,
-		],
-		softSeparator(theme),
-	);
+	let left = "";
+	if (settings.path && leftBudget > 0) {
+		const pathMode = leftBudget < 32 ? "base" : leftBudget < 70 ? "abbrev" : "full";
+		const path = formatCwd(snapshot.cwd, process.env.HOME || process.env.USERPROFILE, pathMode);
+		const pathPart = segment(theme, icons.path, "mdLink", path, "text");
+		const branchPart = renderData.branch ? segment(theme, icons.branch, "mdQuote", renderData.branch, "thinkingText") : null;
+		const sessionPart = snapshot.sessionName
+			? segment(theme, icons.session, "customMessageLabel", snapshot.sessionName, "thinkingText")
+			: null;
+		const candidates = [
+			joinParts([pathPart, branchPart, sessionPart], separator),
+			joinParts([pathPart, branchPart], separator),
+			pathPart,
+		];
+		left = candidates.find((candidate) => visibleWidth(candidate) <= leftBudget)
+			?? truncateToWidth(pathPart, leftBudget, theme.fg("dim", "…"));
+	}
 
-	return truncateToWidth(line, width, theme.fg("dim", "…"));
+	if (!left) return truncateToWidth(right, width, theme.fg("dim", "…"));
+	if (!right) return truncateToWidth(left, width, theme.fg("dim", "…"));
+	return padBetween(left, right, width);
 }
 
 function renderBlackholeLine(
@@ -167,14 +191,6 @@ function renderStatsLines(
 	const separator = softSeparator(theme);
 	const segments: string[] = [];
 
-	if (settings.context) {
-		const { percent, contextWindow } = snapshot.context;
-		const tone = contextTone(percent);
-		const percentLabel = percent !== null ? `${percent.toFixed(1)}%` : "?";
-		const windowLabel = theme.fg("dim", `/${formatTokens(contextWindow)}`);
-		segments.push(segment(theme, icons.context, tone, "") + theme.fg(tone, percentLabel) + windowLabel);
-	}
-
 	if (settings.traffic && (snapshot.usage.input || snapshot.usage.output)) {
 		const traffic: string[] = [];
 		if (snapshot.usage.input) {
@@ -207,51 +223,36 @@ function renderStatsLines(
 		segments.push(segment(theme, icons.cost, "warning", amount, "warning"));
 	}
 
-	const thinking = settings.thinking && snapshot.model?.reasoning ? thinkingStyle(snapshot.thinkingLevel) : null;
-	const right = joinParts(
-		[
-			settings.provider && snapshot.model ? theme.fg("muted", snapshot.model.provider) : null,
-			settings.model
-				? theme.bold(theme.fg("accent", `${icons.model} ${snapshot.model?.id ?? "no-model"}`))
-				: null,
-			thinking ? theme.fg(thinking.color, `${icons.thinking} ${thinking.label}`) : null,
-		],
-		separator,
-	);
+	const elapsed = settings.elapsed ? snapshot.nowMs - snapshot.sessionStartMs : 0;
+	const right = elapsed >= 5000 ? segment(theme, icons.time, "dim", formatDuration(elapsed), "dim") : "";
 	const rightWidth = visibleWidth(right);
-	const leftBudget = rightWidth > 0 ? Math.max(20, width - rightWidth - 2) : width;
+	const leftBudget = rightWidth > 0 ? Math.max(16, width - rightWidth - 2) : width;
 	const quota = settings.extensions
 		? renderSubscriptionUsage(theme, snapshot, renderData.subscriptionUsage, !settings.provider, leftBudget)
 		: null;
 	if (quota) segments.push(quota);
 
-	if (settings.elapsed) {
-		const elapsed = snapshot.nowMs - snapshot.sessionStartMs;
-		if (elapsed >= 5000) segments.push(segment(theme, icons.time, "dim", formatDuration(elapsed), "dim"));
-	}
-
 	const leftLines = layoutSegments(segments, separator, leftBudget);
+	if (leftLines.length === 0) return rightWidth > 0 ? [padBetween("", right, width)] : [];
+
 	const lines: string[] = [];
-
-	if (leftLines.length === 0) {
-		if (rightWidth > 0) lines.push(truncateToWidth(right, width, theme.fg("dim", "…")));
-	} else {
-		const firstLeft = leftLines[0]!;
-		if (rightWidth === 0) {
-			lines.push(firstLeft);
-		} else if (visibleWidth(firstLeft) + 2 + rightWidth <= width) {
-			lines.push(padBetween(firstLeft, right, width));
-		} else {
-			const available = Math.max(0, width - visibleWidth(firstLeft) - 1);
-			lines.push(firstLeft + " " + truncateToWidth(right, available, theme.fg("dim", "…")));
-		}
-		lines.push(...leftLines.slice(1));
-	}
-
+	const firstLeft = leftLines[0]!;
+	if (rightWidth === 0) lines.push(firstLeft);
+	else if (visibleWidth(firstLeft) + 2 + rightWidth <= width) lines.push(padBetween(firstLeft, right, width));
+	else lines.push(`${truncateToWidth(firstLeft, Math.max(0, width - rightWidth - 1), theme.fg("dim", "…"))} ${right}`);
+	lines.push(...leftLines.slice(1));
 	return lines;
 }
 
 const PLANNING_STATUS_KEY = "planning-with-files";
+
+function isQuietExtensionStatus(key: string, text: string): boolean {
+	const state = "(?:ready|complete|completed|idle|ok)";
+	if (new RegExp(`^${state}$`, "i").test(text)) return true;
+	if (key === PLANNING_STATUS_KEY && /^\d+\/\d+\s+phases?\s+completed?$/i.test(text)) return true;
+	const escapedKey = key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+	return new RegExp(`^${escapedKey}\\s+${state}$`, "i").test(text);
+}
 
 function renderExtensionStatusLine(
 	theme: FooterTheme,
@@ -261,7 +262,7 @@ function renderExtensionStatusLine(
 ): string | null {
 	const entries = Array.from(statuses.entries())
 		.map(([key, text]) => [key, text.replace(/[\r\n\t]/g, " ").replace(/ +/g, " ").trim()] as const)
-		.filter(([, text]) => Boolean(text));
+		.filter(([key, text]) => Boolean(text) && !isQuietExtensionStatus(key, text));
 	if (entries.length === 0) return null;
 
 	const separator = softSeparator(theme);
@@ -284,6 +285,7 @@ function renderExtensionStatusLine(
 	return padBetween(truncateToWidth(left, leftWidth, theme.fg("dim", "…")), right, width);
 }
 
+
 export function renderFooter(
 	snapshot: FooterSnapshot,
 	settings: FooterSettings,
@@ -294,7 +296,10 @@ export function renderFooter(
 ): string[] {
 	const lines: string[] = [];
 
-	if (settings.path) lines.push(renderPathLine(theme, snapshot, renderData, icons, width));
+	if (settings.path || settings.model || settings.provider || settings.thinking) {
+		const pathLine = renderPathLine(theme, snapshot, settings, renderData, icons, width);
+		if (pathLine) lines.push(pathLine);
+	}
 	lines.push(...renderStatsLines(theme, snapshot, settings, renderData, icons, width));
 	if (settings.blackhole && snapshot.blackhole) {
 		lines.push(renderBlackholeLine(theme, snapshot.blackhole, icons, width));
