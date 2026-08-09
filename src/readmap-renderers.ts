@@ -18,21 +18,21 @@ export const READMAP_RENDERER_MARK = Symbol.for("pi-jielumoon.readmap-renderer")
 /** 接管 readmap 的常用文件/命令工具；其余 readmap 工具保持原 renderer。 */
 export const TARGET_TOOL_NAMES = new Set(["read", "edit", "write", "bash", "ls"]);
 
-const SUMMARY_PREFIX = "↳";
-const EXPAND_HINT = " · Ctrl+O to expand";
+const EXPAND_KEY = "Ctrl+O";
+const EXPAND_HINT = ` · ${EXPAND_KEY}`;
 const HASHLINE_RE = /^(\d+):([0-9a-fA-F]+)\|(.*)$/;
 /** 短 bash：不超过此行数时折叠态也整段展示。 */
-const BASH_SHORT_MAX_LINES = 12;
+const BASH_SHORT_MAX_LINES = 4;
 const BASH_SHORT_MAX_CHARS = 2_000;
 /** 长 bash 折叠态预览行数。 */
-const BASH_COLLAPSED_PREVIEW_LINES = 12;
+const BASH_COLLAPSED_PREVIEW_LINES = 4;
 /** write 展开时内容预览上限。 */
 const CONTENT_PREVIEW_MAX_LINES = 12;
 /** edit/write diff 折叠态最多展示的变更行。 */
-const DIFF_COLLAPSED_PREVIEW_LINES = 8;
+const DIFF_COLLAPSED_PREVIEW_LINES = 6;
 /** ls 折叠态最多展示的目录条目。 */
-const LS_COLLAPSED_PREVIEW_ENTRIES = 12;
-const SPLIT_DIFF_MIN_WIDTH = 100;
+const LS_COLLAPSED_PREVIEW_ENTRIES = 8;
+const SPLIT_DIFF_MIN_WIDTH = 120;
 const SUMMARY_DIFF_MAX_WIDTH = 23;
 
 
@@ -71,6 +71,8 @@ type RenderOptionsLike = {
 	expanded?: boolean;
 	isPartial?: boolean;
 };
+
+type ToolPhase = "running" | "success" | "error" | "noop";
 
 type ToolResultLike = {
 	content?: Array<{ type?: string; text?: string }>;
@@ -113,6 +115,7 @@ type PatchableTool = {
 	renderCall?: (...args: never[]) => unknown;
 	renderResult?: (...args: never[]) => unknown;
 	execute?: (...args: never[]) => unknown;
+	renderShell?: "default" | "self";
 	parameters?: unknown;
 	description?: unknown;
 	[key: string]: unknown;
@@ -274,7 +277,8 @@ function collapsedHint(
 ): string {
 	const safeTotal = Math.max(0, Math.floor(total));
 	const safeShown = Math.max(0, Math.min(Math.floor(shown), safeTotal));
-	const hint = `showing ${safeShown} of ${safeTotal} ${unit}${expandable ? EXPAND_HINT : ""}`;
+	const hidden = Math.max(0, safeTotal - safeShown);
+	const hint = `${hidden} more ${unit}${expandable ? EXPAND_HINT : ""}`;
 	return presentation?.mode === "screen-reader" ? `output: ${hint}` : `… ${hint}`;
 }
 
@@ -325,7 +329,7 @@ function wrapHashlines(text: string, width: number, presentation: RenderPresenta
 		const prefix =
 			styleText(presentation, "dim", padStartVisible(part.lineNo, lineNoWidth)) +
 			styleText(presentation, "muted", ":") +
-			styleText(presentation, "accent", padEndVisible(part.hash, hashWidth)) +
+			styleText(presentation, "dim", padEndVisible(part.hash, hashWidth)) +
 			styleText(presentation, "muted", "|");
 		out.push(...wrapWithHangingIndent(prefix, styleText(presentation, "toolOutput", part.content), width));
 	}
@@ -373,17 +377,17 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
 	return value && typeof value === "object" ? (value as Record<string, unknown>) : undefined;
 }
 
-function summaryLine(
-	summary: string,
-	presentation?: RenderPresentation,
-	label = "tool",
-): string {
-	if (presentation?.mode === "screen-reader") return `${label}: ${summary}`;
-	return `${SUMMARY_PREFIX} ${summary}`;
-}
 
 function toolLabel(theme: ThemeLike | undefined, name: string): string {
-	return themeFg(theme, "toolTitle", themeBold(theme, name));
+	const label = name.length > 0 ? `${name[0]!.toUpperCase()}${name.slice(1)}` : "Tool";
+	return themeFg(theme, "toolTitle", themeBold(theme, label));
+}
+
+function phaseMarker(presentation: RenderPresentation, phase: ToolPhase): string {
+	if (presentation.mode !== "color") return "";
+	const marker = phase === "running" ? "◇" : phase === "error" ? "×" : phase === "noop" ? "·" : "✓";
+	const color = phase === "running" ? "accent" : phase === "error" ? "error" : phase === "noop" ? "dim" : "success";
+	return styleText(presentation, color, marker);
 }
 
 function isExpanded(
@@ -751,120 +755,114 @@ function reuseOrCreateDiff(
 	return new DiffBodyComponent(options);
 }
 
-// ─── call lines ──────────────────────────────────────────────────
+// ─── canonical tool header ─────────────────────────────────────────
 
 function rangeSuffix(args: Record<string, unknown> | undefined): string {
 	const offset = args?.offset;
 	const limit = args?.limit;
 	if (typeof offset === "number" && typeof limit === "number" && offset > 0 && limit > 0) {
-		return `:${offset}-${offset + limit - 1}`;
+		return `:${offset}–${offset + limit - 1}`;
 	}
 	return "";
 }
 
-function renderReadCall(
+type ToolSubject = { target: string; meta: string[] };
+
+function toolSubject(
+	name: string,
 	args: unknown,
-	theme: ThemeLike | undefined,
+	presentation: RenderPresentation,
 	context: RenderContextLike,
-): Component {
-	const p = resolvePresentation(theme);
+): ToolSubject {
 	const record = asRecord(args) ?? {};
-	const path = typeof record.path === "string" ? displayText(record.path, p) : "";
-	const symbol = typeof record.symbol === "string" ? displayText(record.symbol, p) : "";
-	const cwd = context.cwd;
-	let line = p.mode === "screen-reader" ? "read:" : toolLabel(p.theme, "read");
-	if (path) {
-		const shown = `${shortenPath(path)}${rangeSuffix(record)}`;
-		const styled = styleText(p, "accent", shown);
-		line += ` ${p.mode === "color" ? linkPath(styled, path, cwd) : styled}`;
-	} else {
-		line += ` ${styleText(p, "toolOutput", "...")}`;
+	const path = typeof record.path === "string" ? displayText(record.path, presentation) : name === "ls" ? "." : "";
+	const linkedPath = (): string => {
+		if (!path) return styleText(presentation, "toolOutput", "…");
+		const shown = shortenPath(path);
+		const styled = styleText(presentation, "syntaxType", shown);
+		return presentation.mode === "color" ? linkPath(styled, path, context.cwd) : styled;
+	};
+
+	if (name === "read") {
+		const meta: string[] = [];
+		if (typeof record.symbol === "string") meta.push(`symbol: ${displayText(record.symbol, presentation)}`);
+		const suffix = rangeSuffix(record);
+		const target = linkedPath();
+		return {
+			target: path && suffix ? `${target}${styleText(presentation, "syntaxNumber", suffix)}` : target,
+			meta,
+		};
 	}
-	if (symbol) line += ` ${styleText(p, "dim", `symbol: ${symbol}`)}`;
-	return reuseOrCreateText(context.lastComponent, line);
-}
-
-function countEdits(args: Record<string, unknown> | undefined): number {
-	const edits = args?.edits;
-	if (Array.isArray(edits)) return edits.length;
-	if (typeof args?.oldText === "string" || typeof args?.old_text === "string") return 1;
-	return 0;
-}
-
-function renderEditCall(
-	args: unknown,
-	theme: ThemeLike | undefined,
-	context: RenderContextLike,
-): Component {
-	const p = resolvePresentation(theme);
-	const record = asRecord(args) ?? {};
-	const path = typeof record.path === "string" ? displayText(record.path, p) : "";
-	const n = countEdits(record);
-	let line = p.mode === "screen-reader" ? "edit:" : toolLabel(p.theme, "edit");
-	if (path) {
-		const styled = styleText(p, "accent", shortenPath(path));
-		line += ` ${p.mode === "color" ? linkPath(styled, path, context.cwd) : styled}`;
-	} else {
-		line += ` ${styleText(p, "toolOutput", "...")}`;
+	if (name === "edit" || name === "write" || name === "create" || name === "overwrite") {
+		return { target: linkedPath(), meta: [] };
 	}
-	if (n > 0) line += ` ${styleText(p, "dim", `${n} ${n === 1 ? "edit" : "edits"}`)}`;
-	return reuseOrCreateText(context.lastComponent, line);
-}
-
-function renderWriteCall(
-	args: unknown,
-	theme: ThemeLike | undefined,
-	context: RenderContextLike,
-): Component {
-	const p = resolvePresentation(theme);
-	const record = asRecord(args) ?? {};
-	const path = typeof record.path === "string" ? displayText(record.path, p) : "";
-	const content = typeof record.content === "string" ? displayText(record.content, p) : undefined;
-	const lines = content === undefined ? 0 : content.split("\n").length;
-	let line = p.mode === "screen-reader" ? "write:" : toolLabel(p.theme, "write");
-	if (path) {
-		const styled = styleText(p, "accent", shortenPath(path));
-		line += ` ${p.mode === "color" ? linkPath(styled, path, context.cwd) : styled}`;
-	} else {
-		line += ` ${styleText(p, "toolOutput", "...")}`;
+	if (name === "bash") {
+		const raw = typeof record.command === "string" ? displayText(record.command, presentation) : "";
+		const first = raw.split("\n")[0] ?? "";
+		return {
+			target: styleText(presentation, "toolOutput", raw.includes("\n") ? `${first} …` : first || "…"),
+			meta: [],
+		};
 	}
-	if (content !== undefined) line += ` ${styleText(p, "dim", `${lines} ${lines === 1 ? "line" : "lines"}`)}`;
-	return reuseOrCreateText(context.lastComponent, line);
+	if (name === "ls") {
+		const meta: string[] = [];
+		if (typeof record.glob === "string") meta.push(`glob: ${displayText(record.glob, presentation)}`);
+		if (typeof record.limit === "number" || typeof record.limit === "string") {
+			meta.push(`limit: ${displayText(String(record.limit), presentation)}`);
+		}
+		return { target: linkedPath(), meta };
+	}
+	return { target: "", meta: [] };
 }
 
-function renderBashCall(
+function styleToolMeta(presentation: RenderPresentation, value: string): string {
+	const stats = /^(\+\d+)\s+(−\d+)$/u.exec(value);
+	if (!stats) return styleText(presentation, "dim", value);
+	return `${styleText(presentation, "toolDiffAdded", stats[1]!)} ${styleText(presentation, "toolDiffRemoved", stats[2]!)}`;
+}
+
+function renderToolHeader(
+	name: string,
+	args: unknown,
+	presentation: RenderPresentation,
+	context: RenderContextLike,
+	options: { phase: ToolPhase; meta?: readonly string[]; expandable?: boolean },
+): string {
+	const subject = toolSubject(name, args, presentation, context);
+	const meta = [...new Set([...subject.meta, ...(options.meta ?? [])].filter((item) => item.length > 0))];
+	if (options.expandable) meta.push(EXPAND_KEY);
+
+	if (presentation.mode === "screen-reader") {
+		const state = options.phase === "running"
+			? "running"
+			: options.phase === "error"
+				? "failed"
+				: options.phase === "noop"
+					? "no-op"
+					: "complete";
+		return `${name} ${state}: ${subject.target}${meta.length > 0 ? `; ${meta.join("; ")}` : ""}`;
+	}
+
+	const label = `${toolLabel(presentation.theme, name)}${subject.target ? `  ${subject.target}` : ""}`;
+	const marker = phaseMarker(presentation, options.phase);
+	const head = marker ? `${marker} ${label}` : label;
+	if (meta.length === 0) return head;
+	const separator = styleText(presentation, "dim", " · ");
+	return `${head}${separator}${meta.map((item) => styleToolMeta(presentation, item)).join(separator)}`;
+}
+
+function renderToolCall(
+	name: string,
 	args: unknown,
 	theme: ThemeLike | undefined,
 	context: RenderContextLike,
 ): Component {
-	const p = resolvePresentation(theme);
-	const record = asRecord(args) ?? {};
-	const raw = typeof record.command === "string" ? displayText(record.command, p) : "";
-	const first = raw.split("\n")[0] ?? "";
-	const command = raw.includes("\n") ? `${first} …` : first;
-	const line = p.mode === "screen-reader"
-		? `bash: ${command || "..."}`
-		: `${toolLabel(p.theme, "bash")} ${styleText(p, "muted", command || "...")}`;
-	return reuseOrCreateText(context.lastComponent, line);
-}
-
-function renderLsCall(
-	args: unknown,
-	theme: ThemeLike | undefined,
-	context: RenderContextLike,
-): Component {
-	const p = resolvePresentation(theme);
-	const record = asRecord(args) ?? {};
-	const path = typeof record.path === "string" ? displayText(record.path, p) : ".";
-	const glob = typeof record.glob === "string" ? displayText(record.glob, p) : "";
-	const limit = record.limit;
-	const limitText = typeof limit === "number" || typeof limit === "string" ? displayText(String(limit), p) : undefined;
-	let line = p.mode === "screen-reader" ? "ls:" : toolLabel(p.theme, "ls");
-	const styled = styleText(p, "accent", shortenPath(path));
-	line += ` ${p.mode === "color" ? linkPath(styled, path, context.cwd) : styled}`;
-	if (glob) line += ` ${styleText(p, "dim", `glob: ${glob}`)}`;
-	if (limitText !== undefined) line += ` ${styleText(p, "dim", `limit: ${limitText}`)}`;
-	return reuseOrCreateText(context.lastComponent, line);
+	if (context.isPartial === false) return reuseOrCreateText(context.lastComponent, "");
+	const presentation = resolvePresentation(theme);
+	return reuseOrCreateText(
+		context.lastComponent,
+		renderToolHeader(name, args, presentation, context, { phase: "running" }),
+	);
 }
 
 // ─── result renderers ────────────────────────────────────────────
@@ -874,6 +872,36 @@ function warningBadges(value: unknown): string[] {
 	return [`${value.length} warning${value.length === 1 ? "" : "s"}`];
 }
 
+function renderToolError(
+	name: string,
+	body: string,
+	options: RenderOptionsLike,
+	presentation: RenderPresentation,
+	context: RenderContextLike,
+	meta: readonly string[] = [],
+	collapsedTail = 0,
+): Component {
+	const [first = `${name} failed`, ...rest] = body.split("\n");
+	const expanded = isExpanded(options, context);
+	const visibleRest = expanded ? rest : collapsedTail > 0 ? rest.slice(-collapsedTail) : [];
+	const hidden = Math.max(0, rest.length - visibleRest.length);
+	const header = renderToolHeader(name, context.args, presentation, context, {
+		phase: "error",
+		meta: [...meta, first || `${name} failed`],
+		expandable: hidden > 0,
+	});
+	if (visibleRest.length === 0) return reuseOrCreateText(context.lastComponent, header);
+	return reuseOrCreateWidthAware(context.lastComponent, (width) => [
+		header,
+		...visibleRest.flatMap((line) => wrapWithHangingIndent(
+			presentation.mode === "screen-reader" ? "output: " : styleText(presentation, "error", "┃ "),
+			styleText(presentation, "toolOutput", line),
+			width,
+		)),
+		...(hidden > 0 ? [collapsedHint(visibleRest.length, rest.length, "error lines", true, presentation)] : []),
+	]);
+}
+
 function renderReadResult(
 	result: ToolResultLike,
 	options: RenderOptionsLike,
@@ -881,61 +909,44 @@ function renderReadResult(
 	context: RenderContextLike,
 ): Component {
 	const p = resolvePresentation(theme);
-	if (context.isPartial || options.isPartial) {
-		return new Text(summaryLine("pending read", p, "read"), 0, 0);
-	}
+	if (context.isPartial || options.isPartial) return reuseOrCreateText(context.lastComponent, "");
 
 	const body = textOf(result, p);
-	if (context.isError || result.isError) {
-		const first = body.split("\n")[0] || "Error";
-		const expanded = isExpanded(options, context);
-		return new Text(summaryLine(expanded && body ? body : first, p, "read"), 0, 0);
-	}
+	if (context.isError || result.isError) return renderToolError("read", body, options, p, context);
 
 	const details = asRecord(result.details);
 	const ptc = asRecord(details?.ptcValue);
 	const expanded = isExpanded(options, context);
-	const badges: string[] = [];
-
+	const meta: string[] = [];
 	if (ptc) {
 		const range = asRecord(ptc.range);
 		const truncation = asRecord(ptc.truncation);
 		const start = typeof range?.startLine === "number" ? range.startLine : 1;
 		const end = typeof range?.endLine === "number" ? range.endLine : start;
 		const total = typeof range?.totalLines === "number" ? range.totalLines : end;
-		const visible =
-			truncation && typeof truncation.outputLines === "number"
-				? truncation.outputLines
-				: Math.max(0, end - start + 1);
-		const truncated = Boolean(truncation);
+		const visible = truncation && typeof truncation.outputLines === "number"
+			? truncation.outputLines
+			: Math.max(0, end - start + 1);
 		const word = visible === 1 ? "line" : "lines";
-		badges.push(
-			truncated
-				? `loaded ${visible} of ${typeof truncation?.totalLines === "number" ? truncation.totalLines : total} ${word} (truncated)`
-				: `loaded ${visible} ${word}`,
-		);
+		meta.push(truncation ? `${visible}/${typeof truncation.totalLines === "number" ? truncation.totalLines : total} ${word}` : `${visible} ${word}`);
+		if (truncation) meta.push("truncated");
 		const symbol = asRecord(ptc.symbol);
-		if (symbol && typeof symbol.name === "string") badges.push(`symbol: ${displayText(symbol.name, p)}`);
-		else if (typeof ptc.symbol === "string") badges.push(`symbol: ${displayText(ptc.symbol, p)}`);
-		if (ptc.map) badges.push("map");
-		badges.push(...warningBadges(ptc.warnings));
+		if (symbol && typeof symbol.name === "string") meta.push(`symbol: ${displayText(symbol.name, p)}`);
+		else if (typeof ptc.symbol === "string") meta.push(`symbol: ${displayText(ptc.symbol, p)}`);
+		if (ptc.map) meta.push("map");
+		meta.push(...warningBadges(ptc.warnings));
 	} else {
 		const count = body.length === 0 ? 0 : body.split("\n").length;
-		badges.push(`loaded ${count} ${count === 1 ? "line" : "lines"}`);
+		meta.push(`${count} ${count === 1 ? "line" : "lines"}`);
 	}
 
-	const summary = summaryLine(badges.join(" • "), p, "read");
-	if (expanded && body) {
-		return reuseOrCreateWidthAware(context.lastComponent, (width) => [
-			summary,
-			...wrapHashlines(body, width, p),
-		]);
-	}
-	if (body) {
-		const lineCount = body.split("\n").length;
-		return new Text([summary, collapsedHint(0, lineCount, "lines", true, p)].join("\n"), 0, 0);
-	}
-	return new Text(summary, 0, 0);
+	const header = renderToolHeader("read", context.args, p, context, {
+		phase: "success",
+		meta,
+		expandable: Boolean(body) && !expanded,
+	});
+	if (!expanded || !body) return reuseOrCreateText(context.lastComponent, header);
+	return reuseOrCreateWidthAware(context.lastComponent, (width) => [header, ...wrapHashlines(body, width, p)]);
 }
 
 function renderEditResult(
@@ -945,9 +956,7 @@ function renderEditResult(
 	context: RenderContextLike,
 ): Component {
 	const p = resolvePresentation(theme);
-	if (context.isPartial || options.isPartial) {
-		return new Text(summaryLine("pending edit", p, "edit"), 0, 0);
-	}
+	if (context.isPartial || options.isPartial) return reuseOrCreateText(context.lastComponent, "");
 
 	const body = textOf(result, p);
 	const details = asRecord(result.details) ?? {};
@@ -957,19 +966,17 @@ function renderEditResult(
 	const noopEdits = Array.isArray(ptc?.noopEdits) ? ptc.noopEdits : [];
 	const warnings = warningBadges(ptc?.warnings);
 	const semantic = asRecord(ptc?.semanticSummary);
-	const classification =
-		typeof semantic?.classification === "string" ? displayText(semantic.classification, p) : undefined;
+	const classification = typeof semantic?.classification === "string"
+		? displayText(semantic.classification, p)
+		: undefined;
 
-	if (noopEdits.length > 0 && !isError) {
-		const lines = [summaryLine("no-op", p, "edit")];
-		if (expanded && body) lines.push(styleText(p, "dim", body));
-		return new Text(lines.join("\n"), 0, 0);
-	}
-
-	if (isError) {
-		const first = body.split("\n")[0] || "edit failed";
-		const msg = expanded && body ? body : first;
-		return new Text(summaryLine(msg, p, "edit"), 0, 0);
+	if (isError) return renderToolError("edit", body, options, p, context);
+	if (noopEdits.length > 0) {
+		const header = renderToolHeader("edit", context.args, p, context, {
+			phase: "noop",
+			meta: ["no-op", classification ?? "", ...warnings],
+		});
+		return reuseOrCreateText(context.lastComponent, expanded && body ? `${header}\n${styleText(p, "dim", body)}` : header);
 	}
 
 	const diffData = isDiffData(details.diffData)
@@ -978,22 +985,18 @@ function renderEditResult(
 			? ptc.diffData
 			: undefined;
 	const stats = diffData?.stats ?? { added: 0, removed: 0 };
-	const badges = [`edited +${stats.added} -${stats.removed}`];
-	if (classification) badges.push(classification);
-	badges.push(...warnings);
-	const summary = summaryLine(badges.join(" • "), p, "edit");
-
-	if (diffData) {
-		return reuseOrCreateDiff(context.lastComponent, {
-			prefixLines: [summary],
-			diffData,
-			theme: p.theme,
-			expanded,
-			presentation: p,
-		});
-	}
-
-	return new Text(summary, 0, 0);
+	const header = renderToolHeader("edit", context.args, p, context, {
+		phase: "success",
+		meta: [`+${stats.added} −${stats.removed}`, classification ?? "", ...warnings],
+	});
+	if (!diffData) return reuseOrCreateText(context.lastComponent, header);
+	return reuseOrCreateDiff(context.lastComponent, {
+		prefixLines: [header],
+		diffData,
+		theme: p.theme,
+		expanded,
+		presentation: p,
+	});
 }
 
 function renderWriteResult(
@@ -1003,40 +1006,27 @@ function renderWriteResult(
 	context: RenderContextLike,
 ): Component {
 	const p = resolvePresentation(theme);
-	if (context.isPartial || options.isPartial) {
-		return new Text(summaryLine("pending write", p, "write"), 0, 0);
-	}
+	if (context.isPartial || options.isPartial) return reuseOrCreateText(context.lastComponent, "");
 
 	const body = textOf(result, p);
 	const details = asRecord(result.details) ?? {};
 	const ptc = asRecord(details.ptcValue);
 	const expanded = isExpanded(options, context);
 	const isError = Boolean(context.isError || result.isError || ptc?.ok === false);
+	if (isError) return renderToolError("write", body, options, p, context);
 
-	if (isError) {
-		const first = body.split("\n")[0] || "write failed";
-		return new Text(summaryLine(expanded && body ? body : first, p, "write"), 0, 0);
-	}
-
-	const state = details.writeState === "overwritten" ? "overwritten" : "created";
+	const state = details.writeState === "overwritten" ? "overwrite" : "create";
 	const warnings = warningBadges(ptc?.warnings ?? details.warnings);
-
-	if (state === "created") {
+	if (state === "create") {
 		const ptcLines = Array.isArray(ptc?.lines) ? ptc.lines : [];
 		const lineCount = ptcLines.length;
 		const hasContent = lineCount > 0;
-		const badges = [
-			state,
-			...(hasContent ? [`${lineCount} ${lineCount === 1 ? "line" : "lines"}`] : []),
-			...warnings,
-		];
-		const summary = summaryLine(badges.join(" • "), p, "write");
-		if (!expanded || !hasContent) {
-			const lines = hasContent && !expanded
-				? [summary, collapsedHint(0, lineCount, "lines", true, p)]
-				: [summary];
-			return new Text(lines.join("\n"), 0, 0);
-		}
+		const header = renderToolHeader("create", context.args, p, context, {
+			phase: "success",
+			meta: [...(hasContent ? [`${lineCount} ${lineCount === 1 ? "line" : "lines"}`] : []), ...warnings],
+			expandable: hasContent && !expanded,
+		});
+		if (!expanded || !hasContent) return reuseOrCreateText(context.lastComponent, header);
 
 		const rawLines = ptcLines.flatMap((item) => {
 			const row = asRecord(item);
@@ -1044,11 +1034,10 @@ function renderWriteResult(
 			return typeof item === "string" ? [displayText(item, p)] : [];
 		});
 		const shown = rawLines.slice(0, CONTENT_PREVIEW_MAX_LINES);
-		const hidden = rawLines.length - shown.length;
 		return reuseOrCreateWidthAware(context.lastComponent, (width) => [
-			summary,
+			header,
 			...wrapHashlines(shown.join("\n"), width, p),
-			...(hidden > 0 ? [collapsedHint(shown.length, lineCount, "lines", false, p)] : []),
+			...(rawLines.length > shown.length ? [collapsedHint(shown.length, lineCount, "lines", false, p)] : []),
 		]);
 	}
 
@@ -1057,21 +1046,18 @@ function renderWriteResult(
 		: isDiffData(ptc?.diffData)
 			? ptc.diffData
 			: undefined;
-	const badges = [state, ...warnings];
-	if (diffData) badges.push(`+${diffData.stats.added} -${diffData.stats.removed}`);
-	const summary = summaryLine(badges.join(" • "), p, "write");
-
-	if (diffData) {
-		return reuseOrCreateDiff(context.lastComponent, {
-			prefixLines: [summary],
-			diffData,
-			theme: p.theme,
-			expanded,
-			presentation: p,
-		});
-	}
-
-	return new Text(summary, 0, 0);
+	const header = renderToolHeader("overwrite", context.args, p, context, {
+		phase: "success",
+		meta: [...(diffData ? [`+${diffData.stats.added} −${diffData.stats.removed}`] : []), ...warnings],
+	});
+	if (!diffData) return reuseOrCreateText(context.lastComponent, header);
+	return reuseOrCreateDiff(context.lastComponent, {
+		prefixLines: [header],
+		diffData,
+		theme: p.theme,
+		expanded,
+		presentation: p,
+	});
 }
 
 function renderBashResult(
@@ -1081,44 +1067,42 @@ function renderBashResult(
 	context: RenderContextLike,
 ): Component {
 	const p = resolvePresentation(theme);
-	if (context.isPartial || options.isPartial) {
-		return new Text(summaryLine("running", p, "bash"), 0, 0);
-	}
+	if (context.isPartial || options.isPartial) return reuseOrCreateText(context.lastComponent, "");
 
 	const body = textOf(result, p);
 	const expanded = isExpanded(options, context);
 	const renderOutput = (lines: string[], width: number): string[] => {
 		const prefix = p.mode === "screen-reader" ? "output: " : styleText(p, "dim", "│ ");
-		return lines.flatMap((line) =>
-			wrapWithHangingIndent(prefix, styleText(p, "toolOutput", line), width),
-		);
+		return lines.flatMap((line) => wrapWithHangingIndent(prefix, styleText(p, "toolOutput", line), width));
 	};
-
 	if (context.isError || result.isError) {
-		const [first = "command failed", ...rest] = body.split("\n");
-		const summary = summaryLine(first || "command failed", p, "bash");
-		if (!expanded || rest.length === 0) return new Text(summary, 0, 0);
-		return reuseOrCreateWidthAware(context.lastComponent, (width) => [
-			summary,
-			...renderOutput(rest, width),
-		]);
+		const details = asRecord(result.details);
+		const ptc = asRecord(details?.ptcValue);
+		const exitCode = typeof details?.exitCode === "number"
+			? details.exitCode
+			: typeof ptc?.exitCode === "number"
+				? ptc.exitCode
+				: undefined;
+		return renderToolError("bash", body || "command failed", options, p, context, exitCode === undefined ? [] : [`exit ${exitCode}`], 6);
 	}
-
 	if (!body.trim()) {
-		return new Text(summaryLine("command completed (no output)", p, "bash"), 0, 0);
+		return reuseOrCreateText(context.lastComponent, renderToolHeader("bash", context.args, p, context, {
+			phase: "success",
+			meta: ["no output"],
+		}));
 	}
 
 	const lines = body.replace(/\n+$/, "").split("\n");
 	const lineCount = lines.length;
-	const summary = summaryLine(
-		`${lineCount} ${lineCount === 1 ? "line" : "lines"} returned`,
-		p,
-		"bash",
-	);
 	const short = lineCount <= BASH_SHORT_MAX_LINES && body.length <= BASH_SHORT_MAX_CHARS;
-	const visible = expanded || short ? lines : lines.slice(0, BASH_COLLAPSED_PREVIEW_LINES);
+	const visible = expanded || short ? lines : lines.slice(-BASH_COLLAPSED_PREVIEW_LINES);
+	const header = renderToolHeader("bash", context.args, p, context, {
+		phase: "success",
+		meta: [`${lineCount} ${lineCount === 1 ? "line" : "lines"}`],
+		expandable: !expanded && !short,
+	});
 	return reuseOrCreateWidthAware(context.lastComponent, (width) => [
-		summary,
+		header,
 		...renderOutput(visible, width),
 		...(!expanded && !short && visible.length < lineCount
 			? [collapsedHint(visible.length, lineCount, "lines", true, p)]
@@ -1178,16 +1162,11 @@ function renderLsResult(
 	context: RenderContextLike,
 ): Component {
 	const p = resolvePresentation(theme);
-	if (context.isPartial || options.isPartial) {
-		return new Text(summaryLine("listing", p, "ls"), 0, 0);
-	}
+	if (context.isPartial || options.isPartial) return reuseOrCreateText(context.lastComponent, "");
 
 	const body = textOf(result, p);
 	const expanded = isExpanded(options, context);
-	if (context.isError || result.isError) {
-		const first = body.split("\n")[0] || "ls failed";
-		return new Text(summaryLine(expanded && body ? body : first, p, "ls"), 0, 0);
-	}
+	if (context.isError || result.isError) return renderToolError("ls", body, options, p, context);
 
 	const details = asRecord(result.details);
 	const ptc = asRecord(details?.ptcValue);
@@ -1200,34 +1179,34 @@ function renderLsResult(
 			: outputLines.length;
 	const truncated = Boolean(ptc?.truncated);
 	if (total === 0 && entries.length === 0) {
-		return new Text(summaryLine("empty directory", p, "ls"), 0, 0);
+		return reuseOrCreateText(context.lastComponent, renderToolHeader("ls", context.args, p, context, {
+			phase: "success",
+			meta: ["empty"],
+		}));
 	}
 
-	const summary = summaryLine(`${total} ${total === 1 ? "entry" : "entries"} returned`, p, "ls");
 	return reuseOrCreateWidthAware(context.lastComponent, (width) => {
 		let lines: string[];
 		let shown: number;
 		if (entries.length > 0) {
-			const layout = lsEntryLines(
-				entries,
-				p,
-				width,
-				expanded ? undefined : LS_COLLAPSED_PREVIEW_ENTRIES,
-			);
+			const layout = lsEntryLines(entries, p, width, expanded ? undefined : LS_COLLAPSED_PREVIEW_ENTRIES);
 			lines = layout.lines;
 			shown = layout.shown;
 		} else {
-			const visibleOutput = expanded
-				? outputLines
-				: outputLines.slice(0, LS_COLLAPSED_PREVIEW_ENTRIES);
+			const visibleOutput = expanded ? outputLines : outputLines.slice(0, LS_COLLAPSED_PREVIEW_ENTRIES);
 			lines = visibleOutput.map((line) => p.mode === "screen-reader"
 				? `entry: ${line}`
 				: styleText(p, "toolOutput", line));
 			shown = visibleOutput.length;
 		}
 		const hidden = Math.max(0, total - shown);
+		const header = renderToolHeader("ls", context.args, p, context, {
+			phase: "success",
+			meta: [`${total} ${total === 1 ? "entry" : "entries"}`],
+			expandable: !expanded && (hidden > 0 || truncated),
+		});
 		return [
-			summary,
+			header,
 			...lines,
 			...(hidden > 0 || (!expanded && truncated)
 				? [collapsedHint(shown, total, "entries", !expanded, p)]
@@ -1280,22 +1259,7 @@ export function patchReadmapTool(tool: unknown): boolean {
 	const renderCall = (args: unknown, theme: unknown, context: RenderContextLike = {}) => {
 		const t = asThemeLike(theme);
 		try {
-			switch (name) {
-				case "read":
-					return renderReadCall(args, t, context);
-				case "edit":
-					return renderEditCall(args, t, context);
-				case "write":
-					return renderWriteCall(args, t, context);
-				case "bash":
-					return renderBashCall(args, t, context);
-
-				case "ls":
-					return renderLsCall(args, t, context);
-				default:
-					return safeCallOriginal(originals.renderCall, [args, theme, context])
-						?? new Text(name, 0, 0);
-			}
+			return renderToolCall(name, args, t, context);
 		} catch {
 			return (
 				safeCallOriginal(originals.renderCall, [args, theme, context])
@@ -1328,13 +1292,14 @@ export function patchReadmapTool(tool: unknown): boolean {
 		} catch {
 			return (
 				safeCallOriginal(originals.renderResult, [result, options, theme, context])
-				?? new Text(summaryLine("render error"), 0, 0)
+				?? new Text("· render error", 0, 0)
 			);
 		}
 	};
 
 	target.renderCall = renderCall as PatchableTool["renderCall"];
 	target.renderResult = renderResult as PatchableTool["renderResult"];
+	target.renderShell = "self";
 	Object.defineProperty(target, READMAP_RENDERER_MARK, {
 		value: true,
 		configurable: true,

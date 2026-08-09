@@ -79,6 +79,16 @@ export function renderSakuraGradient(text: string, phase = 0): string {
 	return rendered;
 }
 
+/** Pi 原生 Braille spinner；跨 Working 与工具运行态共享同一节奏。 */
+export const PI_SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"] as const;
+export const SAKURA_SPINNER_FRAMES = PI_SPINNER_FRAMES.map((frame) => renderSakuraGradient(frame));
+
+export function renderSakuraSpinner(now = Date.now(), intervalMs = 80): string {
+	const interval = Math.max(1, Math.floor(intervalMs));
+	const index = Math.floor(Math.max(0, now) / interval) % SAKURA_SPINNER_FRAMES.length;
+	return SAKURA_SPINNER_FRAMES[index] ?? SAKURA_SPINNER_FRAMES[0] ?? "";
+}
+
 /**
  * Box-frame gradient: sakura at BOTH ends, macaron spectrum through the middle.
  * Avoids the linear L→R look where the right corner jumps to sky cyan.

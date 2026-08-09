@@ -11,6 +11,7 @@ import { Markdown, type MarkdownTheme, truncateToWidth, visibleWidth } from "@ea
 import {
 	renderBoxedLine,
 	renderSakuraFrameGradient,
+	renderSakuraSpinner,
 	renderSakuraSolid,
 	rgbForeground,
 } from "./gradient";
@@ -54,6 +55,8 @@ type ToolRenderCache = {
 
 type BashRuntime = {
 	status?: "running" | "complete" | "cancelled" | "error";
+	command?: string;
+	exitCode?: number;
 	outputLines?: readonly string[];
 	expanded?: boolean;
 };
@@ -73,14 +76,16 @@ const toolRenderCache = new WeakMap<object, ToolRenderCache>();
 const toolRenderRevision = new WeakMap<object, number>();
 const bashRenderCache = new WeakMap<object, BashRenderCache>();
 
-const MIN_BORDER_WIDTH = 8;
+const MIN_RAIL_WIDTH = 7;
+const READ_INDENT_WIDTH = 2;
+const TOOL_FRAME_CHROME_WIDTH = 3;
 const OSC133_ZONE_START = "\x1b]133;A\x07";
 const OSC133_ZONE_END = "\x1b]133;B\x07";
 const OSC133_ZONE_FINAL = "\x1b]133;C\x07";
 const RAIL_WORKING = [159, 211, 242] as const;
 const RAIL_SUCCESS = [174, 229, 197] as const;
 const RAIL_ERROR = [255, 143, 163] as const;
-
+const RAIL_CANCELLED = [243, 217, 139] as const;
 function isRenderedLines(value: unknown): value is RenderedLines {
 	return Array.isArray(value) && value.every((line) => typeof line === "string");
 }
@@ -95,6 +100,40 @@ function stripAnsi(line: string): string {
 		.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "");
 }
 
+
+const TRAILING_TERMINAL_PADDING = /[ \t]+((?:(?:\x1b\[[0-?]*[ -/]*[@-~])|(?:\x1b\][^\x07]*(?:\x07|\x1b\\)))*)$/;
+
+/** 移除 Text 为整行补齐的尾空格，同时保留其后的 ANSI reset。 */
+function trimTerminalPadding(line: string): string {
+	let trimmed = line;
+	while (true) {
+		const next = trimmed.replace(TRAILING_TERMINAL_PADDING, "$1");
+		if (next === trimmed) return trimmed;
+		trimmed = next;
+	}
+}
+
+/** 移除宿主工具卡背景，保留前景色、粗体及其它 SGR 样式。 */
+function stripBackgroundAnsi(line: string): string {
+	return line.replace(/\x1b\[([0-9;:]*)m/g, (_sequence, parameters: string) => {
+		const values = parameters.split(";");
+		const kept: string[] = [];
+		for (let index = 0; index < values.length; index += 1) {
+			const value = values[index] ?? "";
+			if (value.startsWith("48:") || value === "49") continue;
+			const code = Number(value || "0");
+			if ((code >= 40 && code <= 47) || (code >= 100 && code <= 107)) continue;
+			if (code === 48) {
+				const mode = values[index + 1];
+				index += mode === "2" ? 4 : mode === "5" ? 2 : 0;
+				continue;
+			}
+			kept.push(value);
+		}
+		return kept.length > 0 ? `\x1b[${kept.join(";")}m` : "";
+	});
+}
+
 function isBlank(line: string): boolean {
 	return stripAnsi(line).trim().length === 0;
 }
@@ -107,10 +146,32 @@ function containsResultImage(runtime: ToolRuntime): boolean {
 	return runtime.result?.content?.some((item) => item.type === "image") ?? false;
 }
 
-function fitInnerLine(line: string, width: number): string {
-	const content = truncateToWidth(line, width, "");
-	return `${content}${" ".repeat(Math.max(0, width - visibleWidth(content)))}`;
+function toolPredecessorWidth(width: number, runtime: ToolRuntime): number {
+	if (
+		resolveRenderMode() !== "color" ||
+		!Number.isFinite(width) ||
+		width <= 2 ||
+		runtime.hideComponent ||
+		(runtime.toolName !== "read" && containsResultImage(runtime))
+	) {
+		return width;
+	}
+	const chromeWidth = runtime.toolName === "read" ? READ_INDENT_WIDTH : TOOL_FRAME_CHROME_WIDTH;
+	return Math.max(1, Math.floor(width) - chromeWidth);
 }
+
+function bashPredecessorWidth(width: number, runtime: BashRuntime): number {
+	if (
+		resolveRenderMode() !== "color" ||
+		!Number.isFinite(width) ||
+		width <= 2 ||
+		containsTerminalImage(runtime.outputLines ?? [])
+	) {
+		return width;
+	}
+	return Math.max(1, Math.floor(width) - TOOL_FRAME_CHROME_WIDTH);
+}
+
 
 function themeFg(theme: Theme | undefined, color: ThemeColor, text: string): string {
 	if (!theme) return text;
@@ -141,9 +202,8 @@ function makeUserMarkdownTheme(theme: Theme | undefined): MarkdownTheme {
 }
 
 function renderUserLine(line: string, width: number): string {
-	const rail = `${renderSakuraSolid("▐")} `;
-	const contentWidth = Math.max(0, width - visibleWidth(rail));
-	return truncateToWidth(`${rail}${fitInnerLine(line, contentWidth)}`, width, "");
+	const outerRail = renderSakuraSolid("│");
+	return renderBoxedLine(line, width, `${outerRail} ${renderSakuraSolid("▌")} `, outerRail);
 }
 
 function withPromptZoneMarkers(lines: RenderedLines): RenderedLines {
@@ -154,20 +214,22 @@ function withPromptZoneMarkers(lines: RenderedLines): RenderedLines {
 	return markedLines;
 }
 
-/** 复用 Sakura 用户消息的 Markdown + 渐变 rail 结构，不使用 Pi 默认 Box。 */
+/** 复用 Pi Markdown，以无标题圆框和 Sakura 粗 rail 区分用户消息。 */
 function renderSakuraUserMessage(
 	receiver: PatchableUserMessage,
 	width: number,
 	theme: Theme | undefined,
 ): RenderedLines | undefined {
 	const text = receiver.text;
-	if (resolveRenderMode() !== "color" || typeof text !== "string" || width < MIN_BORDER_WIDTH) return undefined;
+	if (resolveRenderMode() !== "color" || typeof text !== "string" || width < MIN_RAIL_WIDTH) return undefined;
 
 	const cached = userMessageRenderCache.get(receiver as object);
 	if (cached?.text === text && cached.width === width && cached.theme === theme) return cached.lines;
 
-	const rail = `${renderSakuraSolid("▐")} `;
-	const contentWidth = Math.max(1, width - visibleWidth(rail));
+	const outerRail = renderSakuraSolid("│");
+	const leftRail = `${outerRail} ${renderSakuraSolid("▌")} `;
+	const rightRail = outerRail;
+	const contentWidth = Math.max(1, width - visibleWidth(leftRail) - visibleWidth(rightRail));
 	const renderer = new Markdown(
 		text,
 		0,
@@ -177,43 +239,45 @@ function renderSakuraUserMessage(
 	);
 	const rendered = renderer.render(contentWidth);
 	const contentLines = rendered.length > 0 ? rendered : [""];
-	const border = renderSakuraFrameGradient("─".repeat(width));
 	const lines = [
-		border,
-		renderUserLine("", width),
+		truncateToWidth(renderSakuraFrameGradient(topBorder(width)), width, ""),
 		...contentLines.map((line) => renderUserLine(line, width)),
-		renderUserLine("", width),
-		border,
+		truncateToWidth(renderSakuraFrameGradient(bottomBorder(width)), width, ""),
 	];
 	const markedLines = withPromptZoneMarkers(lines);
 	userMessageRenderCache.set(receiver as object, { text, width, theme, lines: markedLines });
 	return markedLines;
 }
 
-function toolName(runtime: ToolRuntime): string {
-	return (runtime.toolName || "tool").replaceAll("_", " ").toUpperCase();
+function toolState(runtime: ToolRuntime): "running" | "success" | "error" {
+	if (runtime.isPartial !== false) return "running";
+	return runtime.result?.isError ? "error" : "success";
 }
 
-function toolStatusLabel(runtime: ToolRuntime, running: boolean): string {
-	const name = toolName(runtime);
-	if (running) return `◆ ${name} · RUNNING`;
-	return runtime.result?.isError ? `× ${name} · FAILED` : `✓ ${name} · COMPLETE`;
+function stateMarker(state: "running" | "success" | "error" | "cancelled"): string {
+	if (state === "running") return renderSakuraSpinner();
+	if (state === "error") return rgbForeground(RAIL_ERROR, "×");
+	if (state === "cancelled") return rgbForeground(RAIL_CANCELLED, "!");
+	return rgbForeground(RAIL_SUCCESS, "✓");
 }
 
-function fitBorderLabel(label: string, width: number): string {
+function topBorder(width: number): string {
 	if (width <= 0) return "";
 	if (width === 1) return "╭";
-	const innerWidth = Math.max(0, width - 2);
-	const lead = `─ ${label} `;
-	let result = "";
-	let used = 0;
-	for (const char of lead) {
-		const charWidth = visibleWidth(char);
-		if (used + charWidth > innerWidth) break;
-		result += char;
-		used += charWidth;
+	return `╭${"─".repeat(Math.max(0, width - 2))}╮`;
+}
+
+function titleBorder(title: string, width: number): string {
+	const semanticTitle = trimTerminalPadding(title);
+	if (width < 8 || isBlank(semanticTitle)) {
+		return truncateToWidth(renderSakuraFrameGradient(topBorder(width)), width, "");
 	}
-	return `╭${result}${"─".repeat(Math.max(0, innerWidth - used))}╮`;
+	const left = "╭─ ";
+	const minimumRight = " ─╮";
+	const titleWidth = Math.max(0, width - visibleWidth(left) - visibleWidth(minimumRight));
+	const fittedTitle = truncateToWidth(semanticTitle, titleWidth, "…");
+	const fillWidth = Math.max(1, width - visibleWidth(left) - visibleWidth(fittedTitle) - visibleWidth(" ╮"));
+	return `${renderSakuraFrameGradient(left)}${fittedTitle}${renderSakuraFrameGradient(` ${"─".repeat(fillWidth)}╮`)}`;
 }
 
 function bottomBorder(width: number): string {
@@ -222,10 +286,41 @@ function bottomBorder(width: number): string {
 	return `╰${"─".repeat(Math.max(0, width - 2))}╯`;
 }
 
-function toolLeftRail(runtime: ToolRuntime): string {
-	if (runtime.isPartial !== false) return rgbForeground(RAIL_WORKING, "┃ ");
-	if (runtime.result?.isError) return rgbForeground(RAIL_ERROR, "┃ ");
+function stateRail(state: "running" | "success" | "error" | "cancelled"): string {
+	if (state === "running") return rgbForeground(RAIL_WORKING, "┃ ");
+	if (state === "error") return rgbForeground(RAIL_ERROR, "┃ ");
+	if (state === "cancelled") return rgbForeground(RAIL_CANCELLED, "┃ ");
 	return rgbForeground(RAIL_SUCCESS, "┃ ");
+}
+
+const LEADING_STATE_MARKER = /^(?:\x1b\[[0-?]*[ -/]*[@-~])*[◇✓×!·⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏](?:\x1b\[[0-?]*[ -/]*[@-~])*\s+/;
+
+function replaceStateMarker(line: string, state: "running" | "success" | "error"): string {
+	const content = line.trimStart();
+	return LEADING_STATE_MARKER.test(content)
+		? content.replace(LEADING_STATE_MARKER, `${stateMarker(state)} `)
+		: `${stateMarker(state)} ${content}`;
+}
+
+function frameBody(
+	prefix: string[],
+	body: string[],
+	width: number,
+	state: "running" | "success" | "error" | "cancelled",
+): RenderedLines {
+	const content = [...body];
+	const headerIndex = content.findIndex((line) => !isBlank(line));
+	const title = headerIndex >= 0 ? content.splice(headerIndex, 1)[0]! : "";
+	while (content[0] !== undefined && isBlank(content[0])) content.shift();
+	const leftRail = stateRail(state);
+	const rightRail = renderSakuraSolid("│");
+	const spacedContent = content.length > 0 ? ["", ...content] : content;
+	return [
+		...prefix,
+		titleBorder(title, width),
+		...spacedContent.map((line) => renderBoxedLine(line, width, leftRail, rightRail)),
+		truncateToWidth(renderSakuraFrameGradient(bottomBorder(width)), width, ""),
+	];
 }
 
 function isHorizontalBorder(line: string): boolean {
@@ -233,68 +328,75 @@ function isHorizontalBorder(line: string): boolean {
 	return /^[─═]{3,}$/.test(plain) || /^[╭┌╔].*[╮┐╗]$/.test(plain) || /^[╰└╚].*[╯┘╝]$/.test(plain);
 }
 
-function frameToolMessage(lines: RenderedLines, width: number, runtime: ToolRuntime): RenderedLines {
+function stripOuterChrome(lines: RenderedLines): { prefix: string[]; body: string[] } {
+	const body = [...lines];
+	const prefix: string[] = [];
+	if (body[0] !== undefined && isBlank(body[0])) prefix.push(body.shift()!);
+	if (body[0] !== undefined && isHorizontalBorder(body[0])) body.shift();
+	if (body.at(-1) !== undefined && isHorizontalBorder(body.at(-1)!)) body.pop();
+	return { prefix, body };
+}
+
+function decorateToolMessage(lines: RenderedLines, width: number, runtime: ToolRuntime): RenderedLines {
+	const isRead = runtime.toolName === "read";
 	if (
 		resolveRenderMode() !== "color" ||
 		width <= 2 ||
 		lines.length === 0 ||
 		runtime.hideComponent ||
-		containsTerminalImage(lines) ||
-		containsResultImage(runtime)
+		(!isRead && (containsTerminalImage(lines) || containsResultImage(runtime)))
 	) {
 		return lines;
 	}
 
-	const body = [...lines];
-	const prefix: string[] = [];
-	if (body[0] !== undefined && isBlank(body[0])) {
-		prefix.push(body.shift()!);
-	}
-	if (body[0] !== undefined && isHorizontalBorder(body[0])) body.shift();
-	if (body.at(-1) !== undefined && isHorizontalBorder(body.at(-1)!)) body.pop();
+	const { prefix, body: nativeBody } = stripOuterChrome(lines);
+	const body = nativeBody.map(stripBackgroundAnsi);
+	if (body.length === 0) return [...prefix, ...body];
 
-	const running = runtime.isPartial !== false;
-	const label = fitBorderLabel(toolStatusLabel(runtime, running), width);
-	const leftRail = toolLeftRail(runtime);
-	const rightRail = renderSakuraSolid("│");
-	const top = truncateToWidth(renderSakuraFrameGradient(label), width, "");
-	const bottom = truncateToWidth(renderSakuraFrameGradient(bottomBorder(width)), width, "");
-	return [
-		...prefix,
-		top,
-		...body.map((line) => renderBoxedLine(line, width, leftRail, rightRail)),
-		bottom,
-	];
+	const state = toolState(runtime);
+	const firstContent = body.findIndex((line) => !isBlank(line) && !containsTerminalImage([line]));
+	if (firstContent >= 0) body[firstContent] = replaceStateMarker(body[firstContent]!, state);
+
+	if (isRead) {
+		return [...prefix, ...body].map((line) => {
+			if (isBlank(line) || containsTerminalImage([line])) return line;
+			return truncateToWidth(`  ${line}`, width, "");
+		});
+	}
+	return frameBody(prefix, body, width, state);
 }
 
-function repaintBashBorders(lines: RenderedLines, width: number): RenderedLines {
+function decorateBashMessage(lines: RenderedLines, width: number, runtime: BashRuntime): RenderedLines {
 	if (resolveRenderMode() !== "color" || width <= 2 || lines.length === 0 || containsTerminalImage(lines)) return lines;
 
-	const plainLines = lines.map(stripAnsi);
-	const running = plainLines.some((line) => line.includes("Running..."));
-	const failed = plainLines.some((line) => /\(exit \d+\)/.test(line));
-	const label = running
-		? "◆ BASH · RUNNING"
-		: failed
-			? "× BASH · FAILED"
-			: "✓ BASH · COMPLETE";
-	let topPainted = false;
+	const { prefix, body: nativeBody } = stripOuterChrome(lines);
+	const body = nativeBody.map(stripBackgroundAnsi);
+	const state = runtime.status === "error"
+		? "error"
+		: runtime.status === "cancelled"
+			? "cancelled"
+			: runtime.status === "running" || runtime.status === undefined
+				? "running"
+				: "success";
+	const headerIndex = body.findIndex((line) => !isBlank(line));
+	if (headerIndex >= 0) {
+		const command = stripAnsi(runtime.command ?? stripAnsi(body[headerIndex]!).trim().replace(/^\$\s*/, ""));
+		const meta = state === "error" && runtime.exitCode !== undefined
+			? ` · exit ${runtime.exitCode}`
+			: state === "cancelled"
+				? " · cancelled"
+				: "";
+		body[headerIndex] = `${stateMarker(state)} Bash  ${command}${meta}`;
+	}
 
-	return lines.map((line, index) => {
-		const plain = plainLines[index]?.trim() ?? "";
-		const horizontal = /^[─═]{3,}$/.test(plain);
-		const topShape = /^[╭┌╔].*[╮┐╗]$/.test(plain);
-		const bottomShape = /^[╰└╚].*[╯┘╝]$/.test(plain);
-		if (bottomShape) return renderSakuraFrameGradient(bottomBorder(width));
-		if (topShape || horizontal) {
-			if (!topPainted) {
-				topPainted = true;
-				return renderSakuraFrameGradient(fitBorderLabel(label, width));
-			}
-			return renderSakuraFrameGradient(bottomBorder(width));
-		}
-		return line;
+	const settledBody = body.filter((line, index) => {
+		if (index === headerIndex) return true;
+		const plain = stripAnsi(line).trim();
+		if (state === "error" && /^\(exit \d+\)$/.test(plain)) return false;
+		if (state === "cancelled" && plain === "(cancelled)") return false;
+		return true;
 	});
+	return frameBody(prefix, settledBody, width, state);
 }
 
 export function installMessageBorders(getTheme: () => Theme | undefined): Cleanup {
@@ -348,9 +450,11 @@ export function installMessageBorders(getTheme: () => Theme | undefined): Cleanu
 				}
 			}
 
-			const rendered = Reflect.apply(predecessor, receiver, args);
+			const contentWidth = typeof width === "number" ? toolPredecessorWidth(width, runtime) : width;
+			const renderArgs = contentWidth === width ? args : [contentWidth, ...args.slice(1)];
+			const rendered = Reflect.apply(predecessor, receiver, renderArgs);
 			if (!isRenderedLines(rendered) || typeof width !== "number") return rendered;
-			const framed = frameToolMessage(rendered, width, runtime);
+			const framed = decorateToolMessage(rendered, width, runtime);
 			if (
 				decorative &&
 				isObject(receiver) &&
@@ -425,9 +529,11 @@ export function installMessageBorders(getTheme: () => Theme | undefined): Cleanu
 				}
 			}
 
-			const rendered = Reflect.apply(predecessor, receiver, args);
+			const contentWidth = typeof width === "number" ? bashPredecessorWidth(width, runtime) : width;
+			const renderArgs = contentWidth === width ? args : [contentWidth, ...args.slice(1)];
+			const rendered = Reflect.apply(predecessor, receiver, renderArgs);
 			if (!isRenderedLines(rendered) || typeof width !== "number") return rendered;
-			const repainted = repaintBashBorders(rendered, width);
+			const repainted = decorateBashMessage(rendered, width, runtime);
 			if (decorative && isObject(receiver) && settled) {
 				bashRenderCache.set(receiver, {
 					width,

@@ -8,7 +8,8 @@ import { truncateToWidth, visibleWidth, type EditorTheme, type TUI } from "@eare
 import { renderSakuraFrameGradient, renderSakuraSolid } from "./gradient.ts";
 
 const FRAME_CHROME_WIDTH = 4;
-const MIN_FRAME_WIDTH = FRAME_CHROME_WIDTH + 1;
+const MIN_CONTENT_WIDTH = 3;
+const MIN_FRAME_WIDTH = FRAME_CHROME_WIDTH + MIN_CONTENT_WIDTH;
 
 type EditorFactory = NonNullable<ReturnType<ExtensionContext["ui"]["getEditorComponent"]>>;
 

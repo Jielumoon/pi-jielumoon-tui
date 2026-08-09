@@ -63,6 +63,26 @@ test("Sakura Editor keeps literal horizontal-rule input and falls back on narrow
 	assert.ok(!narrowLines[0]?.startsWith("╭"));
 });
 
+
+test("Sakura Editor seals paste placeholders and long content at every width", () => {
+	for (const text of ["[paste #1 +11 lines]", "x".repeat(300), "中文".repeat(120)]) {
+		for (const width of [5, 6, 7, 8, 10, 20, 40, 80, 160]) {
+			const editor = createEditor();
+			editor.setText(text);
+			const lines = editor.render(width);
+			const plain = lines.map(stripAnsi);
+			assert.ok(lines.every((line) => visibleWidth(line) <= width));
+			if (width < 7) {
+				assert.ok(!plain[0]?.startsWith("╭"));
+				continue;
+			}
+			assert.ok(lines.every((line) => visibleWidth(line) === width));
+			assert.match(plain[0] ?? "", /^╭.*╮$/);
+			assert.match(plain.at(-1) ?? "", /^╰.*╯$/);
+		}
+	}
+});
+
 test("Sakura Editor preserves Pi scrolling and app-level key handling", () => {
 	const editor = new SakuraEditor(
 		tui,

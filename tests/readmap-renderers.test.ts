@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { ToolExecutionComponent, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { BashExecutionComponent, ToolExecutionComponent, UserMessageComponent, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import installReadmapRenderers, {
 	DiffBodyComponent,
@@ -28,6 +28,7 @@ type MockTool = {
 	description: string;
 	renderCall?: (...args: unknown[]) => unknown;
 	renderResult?: (...args: unknown[]) => unknown;
+	renderShell?: "default" | "self";
 	[key: symbol]: unknown;
 };
 
@@ -86,6 +87,7 @@ test("patch is idempotent and keeps execute/parameters references", () => {
 	assert.equal(tool.description, description);
 	assert.notEqual(typeof tool.renderCall, "undefined");
 	assert.notEqual(typeof tool.renderResult, "undefined");
+	assert.equal(tool.renderShell, "self");
 });
 
 test("install listens for hashline executors and patches bash via registerTool", () => {
@@ -154,8 +156,8 @@ test("read renderer respects collapsed summary and expanded hashlines", () => {
 		{ cwd: "/tmp" },
 	) as { render: (w: number) => string[] };
 	const callText = stripAnsi(call.render(80).join("\n"));
-	assert.match(callText, /read/);
-	assert.match(callText, /foo\.ts:20-24/);
+	assert.match(callText, /Read/);
+	assert.match(callText, /foo\.ts:20–24/);
 	assert.match(callText, /symbol: bar/);
 
 	const result = tool.renderResult?.(
@@ -175,9 +177,10 @@ test("read renderer respects collapsed summary and expanded hashlines", () => {
 		{ expanded: false },
 	) as { render: (w: number) => string[] };
 	const collapsed = stripAnsi(result.render(80).join("\n"));
-	assert.match(collapsed, /loaded 2 lines/);
+	assert.match(collapsed, /✓ Read.*2 lines/);
 	assert.match(collapsed, /map/);
-	assert.match(collapsed, /showing 0 of 2 lines · Ctrl\+O to expand/);
+	assert.match(collapsed, /Ctrl\+O/);
+	assert.doesNotMatch(collapsed, /showing 0 of/);
 	assert.doesNotMatch(collapsed, /const a = 1/);
 
 	const expanded = tool.renderResult?.(
@@ -236,6 +239,40 @@ test("P0 keeps diff and hashline gutters aligned with visible-width paths", () =
 	const callText = stripAnsi(call.render(70).join("\n"));
 	assert.ok(!callText.includes(path));
 	assert.ok(visibleWidth(callText.split("\n")[0] ?? "") <= 70);
+
+	const rangeColors: Array<{ color: string; text: string }> = [];
+	const rangeTheme = {
+		fg: (color: string, text: string) => {
+			rangeColors.push({ color, text });
+			return text;
+		},
+		bold: (text: string) => text,
+	};
+	const rangedCall = read.renderCall?.(
+		{ path: "src/message-borders.ts", offset: 410, limit: 155 },
+		rangeTheme,
+		{ cwd: "/tmp" },
+	) as { render(width: number): string[] };
+	rangedCall.render(80);
+	assert.ok(rangeColors.some((part) => part.color === "syntaxType" && part.text === "src/message-borders.ts"));
+	assert.ok(rangeColors.some((part) => part.color === "syntaxNumber" && part.text === ":410–564"));
+	assert.ok(!rangeColors.some((part) => part.color === "syntaxType" && part.text.includes(":410–564")));
+
+	for (const name of ["edit", "write", "ls"]) {
+		rangeColors.length = 0;
+		const pathTool = makeTool(name);
+		patchReadmapTool(pathTool);
+		const pathCall = pathTool.renderCall?.(
+			{ path: `src/${name}.ts` },
+			rangeTheme,
+			{ cwd: "/tmp" },
+		) as { render(width: number): string[] };
+		pathCall.render(80);
+		assert.ok(
+			rangeColors.some((part) => part.color === "syntaxType" && part.text === `src/${name}.ts`),
+			`${name} 路径必须使用 syntaxType`,
+		);
+	}
 });
 
 
@@ -258,7 +295,7 @@ test("P1/P2 styles hashline segments, structures stdout, and grids ls", () => {
 	) as { render: (w: number) => string[] };
 	colored.render(80);
 	assert.ok(styledColors.includes("dim"));
-	assert.ok(styledColors.includes("accent"));
+	assert.ok(styledColors.includes("success"));
 	assert.ok(styledColors.includes("toolOutput"));
 
 	const colorCalls = styledColors.length;
@@ -440,13 +477,22 @@ test("P3 pairs indexed split rows, counts ls entries, and handles large diffs", 
 		{ expanded: true },
 	) as { render: (width: number) => string[] };
 	const listedText = stripAnsi(listed.render(100).join("\n"));
-	assert.match(listedText, /4 entries returned/);
+	assert.match(listedText, /4 entries/);
 	assert.match(listedText, /a\.ts/);
 	assert.match(listedText, /d\.ts/);
 	assert.doesNotMatch(listedText, /showing 2 of 4 entries/);
+
+	const defaultLsColor = withEnv("PI_READMAP_RENDER_MODE", "color", () =>
+		(ls.renderCall?.({}, theme, { isPartial: true, cwd: "/tmp" }) as { render(width: number): string[] }).render(80));
+	assert.match(stripAnsi(defaultLsColor[0] ?? ""), /^◇ Ls  \./);
+	assert.doesNotMatch(stripAnsi(defaultLsColor[0] ?? ""), /…/);
+	const defaultLsPlain = withEnv("PI_READMAP_RENDER_MODE", "plain", () =>
+		(ls.renderCall?.({}, theme, { isPartial: true, cwd: "/tmp" }) as { render(width: number): string[] }).render(80));
+	assert.match(stripAnsi(defaultLsPlain[0] ?? ""), /^Ls  \./);
+	assert.doesNotMatch(stripAnsi(defaultLsPlain[0] ?? ""), /^\s/);
 });
 
-test("screen-reader mode bypasses Sakura tool framing end to end", () => {
+test("read stays borderless while framed tools embed titles without native backgrounds", () => {
 	const read = makeTool("read");
 	patchReadmapTool(read);
 
@@ -455,14 +501,16 @@ test("screen-reader mode bypasses Sakura tool framing end to end", () => {
 	};
 	const prototype = ToolExecutionComponent.prototype as unknown as ToolPrototype;
 	const originalRender = prototype.render;
+	let predecessorWidth = 0;
 	let renderBody = (_width: number): string[] => ["colored body"];
 	prototype.render = function renderForTest(width: number): string[] {
+		predecessorWidth = width;
 		return renderBody(width);
 	};
 	const cleanup = installMessageBorders(() => theme as never);
 
 	try {
-		const runtime = {
+		const readRuntime = {
 			isPartial: false,
 			result: { isError: false, content: [{ type: "text" }] },
 			toolName: "read",
@@ -470,13 +518,125 @@ test("screen-reader mode bypasses Sakura tool framing end to end", () => {
 			expanded: true,
 			showImages: false,
 		};
-		const colored = withEnv("PI_READMAP_RENDER_MODE", "color", () =>
-			prototype.render.call(runtime, 80));
-		assert.match(stripAnsi(colored.join("\n")), /╭─ ✓ READ · COMPLETE/);
+		const coloredRead = withEnv("PI_READMAP_RENDER_MODE", "color", () =>
+			prototype.render.call(readRuntime, 80));
+		assert.deepEqual(stripAnsi(coloredRead.join("\n")), "  ✓ colored body");
+		assert.doesNotMatch(stripAnsi(coloredRead.join("\n")), /[╭╮╰╯]/);
+		assert.ok(coloredRead.every((line) => line.length === 0 || stripAnsi(line).startsWith("  ")));
+		assert.equal(predecessorWidth, 78, "Read 的 2 列缩进必须先从正文宽度预算中扣除");
+
+		const terminalImage = "\x1b_Gf=100;AAAA\x1b\\";
+		renderBody = () => ["✓ Read  image.png · 1 line", terminalImage];
+		const imageRead = withEnv("PI_READMAP_RENDER_MODE", "color", () =>
+			prototype.render.call({
+				...readRuntime,
+				result: { isError: false, content: [{ type: "image" }] },
+			}, 80));
+		assert.match(stripAnsi(imageRead[0] ?? ""), /^  ✓ Read/);
+		assert.equal(imageRead[1], terminalImage, "图片控制序列必须原样保留");
+		assert.equal(predecessorWidth, 78, "图片 Read 同样必须预留 2 列摘要缩进");
+
+		for (const toolName of ["edit", "write", "bash", "ls", "grep", "todo"]) {
+			const label = toolName[0]!.toUpperCase() + toolName.slice(1);
+			renderBody = () => [
+				`✓ ${label}  target`,
+				"\x1b[48;2;80;80;80m\x1b[38;2;1;2;3mbody\x1b[39m\x1b[49m",
+			];
+			const framed = withEnv("PI_READMAP_RENDER_MODE", "color", () =>
+				prototype.render.call({ ...readRuntime, toolName }, 80));
+			const framedText = stripAnsi(framed.join("\n"));
+			assert.match(framedText, new RegExp(`^╭─ ✓ ${label}  target ─+╮`));
+			assert.match(framedText, /\n┃\s+│\n┃ body\s+│\n╰─+╯$/);
+			assert.equal(framedText.match(new RegExp(label, "g"))?.length, 1);
+			assert.doesNotMatch(framed.join("\n"), /\x1b\[(?:48[;:]|49m)/);
+			assert.match(framed.join("\n"), /\x1b\[38;2;1;2;3m/);
+			assertNoOverflow(framed, 80);
+			assert.equal(predecessorWidth, 77, `${toolName} 外框的 3 列 chrome 必须先从正文宽度预算中扣除`);
+		}
+
+		const splitRightText = "在已完成的视觉研究基础上，连续实施 Sakura Quiet 的 P0、P1、P2 改造；保持 Thinking 完全不动，并完成全量验证与工作记录。";
+		const splitDiff = new DiffBodyComponent({
+			diffData: {
+				stats: { added: 1, removed: 1 },
+				entries: [
+					{ kind: "remove", oldLine: 4, text: "old" },
+					{ kind: "add", newLine: 4, text: splitRightText },
+				],
+				inlineDiffs: [{
+					removeLineIndex: 0,
+					addLineIndex: 1,
+					removeSpans: [{ kind: "remove", text: "old" }],
+					addSpans: [{ kind: "add", text: splitRightText }],
+				}],
+			},
+			theme,
+			expanded: true,
+		});
+		renderBody = (width) => ["✓ Edit  plan.md", ...splitDiff.render(width)];
+		const splitFrame = withEnv("PI_READMAP_RENDER_MODE", "color", () =>
+			prototype.render.call({ ...readRuntime, toolName: "edit" }, 181));
+		const splitPaneWidth = Math.floor((predecessorWidth - 3) / 2);
+		const reconstructedRight = splitFrame
+			.map(stripAnsi)
+			.filter((line) => line.startsWith("┃ "))
+			.map((line) => line.slice(2, -1))
+			.map((line) => line.slice(splitPaneWidth + 3))
+			.map((line) => line.replace(/^▌\+\s+\d+\s+│\s*/, "").trim())
+			.join("")
+			.replace(/\s+/g, "");
+		assert.equal(predecessorWidth, 178);
+		assert.equal(reconstructedRight, splitRightText.replace(/\s+/g, ""));
+		assertNoOverflow(splitFrame, 181);
+
+
+		const fittingBashCommand = `echo "箱宝在线~ $(date '+%Y-%m-%d %H:%M:%S')"; uptime`;
+		renderBody = () => [
+			`\x1b[38;2;1;2;3m✓ bash ${fittingBashCommand}${" ".repeat(160)}\x1b[39m`,
+			"↳ 2 lines returned",
+			"箱宝在线~ 2026-08-10 02:32:24",
+		];
+		const fittingBash = withEnv("PI_READMAP_RENDER_MODE", "color", () =>
+			prototype.render.call({ ...readRuntime, toolName: "bash" }, 190));
+		const fittingBashTop = stripAnsi(fittingBash[0] ?? "");
+		assert.match(fittingBashTop, /uptime ─+╮$/);
+		assert.doesNotMatch(fittingBashTop, /…/);
+		assertNoOverflow(fittingBash, 190);
+
+		const longTitle = `\x1b[38;2;1;2;3m✓ Todo  ${"超长标题".repeat(80)}\x1b[39m`;
+		for (const width of [8, 10, 20, 40, 80, 160]) {
+			renderBody = () => [longTitle, "正文".repeat(200)];
+			const framed = withEnv("PI_READMAP_RENDER_MODE", "color", () =>
+				prototype.render.call({ ...readRuntime, toolName: "todo" }, width));
+			const top = stripAnsi(framed[0] ?? "");
+			assert.ok(framed.every((line) => visibleWidth(line) === width));
+			assert.match(top, /^╭─ /);
+			assert.match(top, /… ─+╮$/);
+		}
+
+		const originalNow = Date.now;
+		try {
+			renderBody = () => ["◇ Edit  target"];
+			Date.now = () => 0;
+			const firstFrame = withEnv("PI_READMAP_RENDER_MODE", "color", () =>
+				prototype.render.call({ ...readRuntime, isPartial: true, result: undefined, toolName: "edit" }, 80));
+			Date.now = () => 80;
+			const secondFrame = withEnv("PI_READMAP_RENDER_MODE", "color", () =>
+				prototype.render.call({ ...readRuntime, isPartial: true, result: undefined, toolName: "edit" }, 80));
+			assert.match(stripAnsi(firstFrame.join("\n")), /^╭─ ⠋ Edit/);
+			assert.match(stripAnsi(secondFrame.join("\n")), /^╭─ ⠙ Edit/);
+
+			renderBody = () => ["◇ Read  target"];
+			const runningRead = withEnv("PI_READMAP_RENDER_MODE", "color", () =>
+				prototype.render.call({ ...readRuntime, isPartial: true, result: undefined }, 80));
+			assert.match(stripAnsi(runningRead.join("\n")), /^  ⠙ Read/);
+			assert.doesNotMatch(stripAnsi(runningRead.join("\n")), /◇/);
+		} finally {
+			Date.now = originalNow;
+		}
 
 		const plain = withEnv("PI_READMAP_RENDER_MODE", "plain", () => {
 			renderBody = () => ["plain body"];
-			return prototype.render.call(runtime, 80);
+			return prototype.render.call({ ...readRuntime, toolName: "edit" }, 80);
 		});
 		assert.deepEqual(plain, ["plain body"]);
 
@@ -488,15 +648,83 @@ test("screen-reader mode bypasses Sakura tool framing end to end", () => {
 				{ expanded: true },
 			) as { render: (width: number) => string[] };
 			renderBody = (width) => component.render(width);
-			return prototype.render.call(runtime, 80);
+			return prototype.render.call(readRuntime, 80);
 		});
 		const screenText = screenReader.join("\n");
-		assert.match(screenText, /read: loaded 1 line/);
+		assert.match(screenText, /read complete:.*1 line/);
 		assert.match(screenText, /1:abc\|const value = 1/);
 		assert.doesNotMatch(screenText, /[╭╮╰╯┃]|\x1b/);
 	} finally {
 		cleanup();
 		prototype.render = originalRender;
+	}
+});
+
+test("user messages use a titleless rail frame distinct from tool cards", () => {
+	type RenderPrototype = { render(this: unknown, width: number): string[] };
+	const userPrototype = UserMessageComponent.prototype as unknown as RenderPrototype;
+	const bashPrototype = BashExecutionComponent.prototype as unknown as RenderPrototype;
+	const originalUserRender = userPrototype.render;
+	const originalBashRender = bashPrototype.render;
+	userPrototype.render = () => ["native user"];
+	let bashPredecessorWidth = 0;
+	bashPrototype.render = (width) => {
+		bashPredecessorWidth = width;
+		return ["", "────────────────", "\x1b[48;2;80;80;80m $ npm test\x1b[49m", "\x1b[48;5;240m test failed\x1b[49m", " (exit 1)", "────────────────", "────────────────"];
+	};
+	const cleanup = installMessageBorders(() => theme as never);
+
+	try {
+		for (const width of [4, 5, 6]) {
+			const fallback = withEnv("PI_READMAP_RENDER_MODE", "color", () =>
+				userPrototype.render.call({ text: "中" }, width));
+			assert.deepEqual(fallback, ["native user"]);
+		}
+		const minimumFrame = withEnv("PI_READMAP_RENDER_MODE", "color", () =>
+			userPrototype.render.call({ text: "中" }, 7));
+		assert.match(stripAnsi(minimumFrame.join("\n")), /^╭─────╮\n│ ▌ 中│\n╰─────╯$/);
+		const userLines = withEnv("PI_READMAP_RENDER_MODE", "color", () =>
+			userPrototype.render.call({ text: "hello world" }, 80));
+		const userText = stripAnsi(userLines.join("\n"));
+		assert.equal(userLines.length, 3);
+		assert.match(userText, /^╭─+╮\n│ ▌ hello world\s+│\n╰─+╯$/);
+		assert.doesNotMatch(userText, /^╭─ [✓×!⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]/);
+		assertNoOverflow(userLines, 80);
+
+		for (const text of ["[paste #1 +11 lines]", "x".repeat(300), "中文".repeat(120)]) {
+			for (const width of [8, 10, 20, 40, 80, 160]) {
+				const rendered = withEnv("PI_READMAP_RENDER_MODE", "color", () =>
+					userPrototype.render.call({ text }, width));
+				const plain = rendered.map(stripAnsi);
+				assert.ok(rendered.every((line) => visibleWidth(line) === width));
+				assert.equal(plain[0], `╭${"─".repeat(width - 2)}╮`);
+				assert.equal(plain.at(-1), `╰${"─".repeat(width - 2)}╯`);
+			}
+		}
+
+		const bashLines = withEnv("PI_READMAP_RENDER_MODE", "color", () =>
+			bashPrototype.render.call({
+				status: "error",
+				command: "npm test",
+				exitCode: 1,
+				outputLines: ["test failed"],
+				expanded: false,
+			}, 80));
+		const bashText = stripAnsi(bashLines.join("\n"));
+		assert.match(bashText, /^\n╭─ × Bash  npm test · exit 1 ─+╮/);
+		assert.match(bashText, /test failed/);
+		assert.match(bashText, /\n┃\s+│\n┃\s+test failed/);
+		assert.doesNotMatch(bashLines.join("\n"), /\x1b\[(?:48[;:]|49m)/);
+		assert.doesNotMatch(bashText, /┃ × Bash/);
+		assert.match(bashText, /\n╰─+╯$/);
+		assert.match(bashText, /\n┃\s+─{3,}\s+│\n╰─+╯$/, "真实水平线输出不能被当成宿主下框删除");
+		assert.doesNotMatch(bashText, /\(exit 1\)/);
+		assertNoOverflow(bashLines, 80);
+		assert.equal(bashPredecessorWidth, 77, "Bash 外框的 3 列 chrome 必须先从正文宽度预算中扣除");
+	} finally {
+		cleanup();
+		userPrototype.render = originalUserRender;
+		bashPrototype.render = originalBashRender;
 	}
 });
 
@@ -519,7 +747,7 @@ test("read error and missing ptcValue fall back safely", () => {
 		theme,
 		{},
 	) as { render: (w: number) => string[] };
-	assert.match(stripAnsi(plain.render(80).join("\n")), /loaded 3 lines/);
+	assert.match(stripAnsi(plain.render(80).join("\n")), /Read.*3 lines/);
 });
 
 test("edit renderer collapses by default with limited diff preview", () => {
@@ -535,6 +763,14 @@ test("edit renderer collapses by default with limited diff preview", () => {
 		stats: { added: 10, removed: 10, context: 0 },
 		entries: manyEntries,
 	};
+	const statsColors: Array<{ color: string; text: string }> = [];
+	const statsTheme = {
+		fg: (color: string, value: string) => {
+			statsColors.push({ color, text: value });
+			return value;
+		},
+		bold: (value: string) => value,
+	};
 
 	const collapsed = tool.renderResult?.(
 		{
@@ -545,16 +781,18 @@ test("edit renderer collapses by default with limited diff preview", () => {
 			},
 		},
 		{ expanded: false },
-		theme,
+		statsTheme,
 		{ expanded: false },
 	) as { render: (w: number) => string[] };
 
 	const text = stripAnsi(collapsed.render(80).join("\n"));
-	assert.match(text, /edited \+10 -10/);
+	assert.match(text, /Edit.*\+10 −10/);
 	assert.match(text, /rename|warning/);
+	assert.ok(statsColors.some((part) => part.color === "toolDiffAdded" && part.text === "+10"));
+	assert.ok(statsColors.some((part) => part.color === "toolDiffRemoved" && part.text === "−10"));
 	// 折叠态有预览，但不铺满全部 20 行
 	assert.match(text, /old-0|new-1/);
-	assert.match(text, /showing 8 of 20 diff lines · Ctrl\+O to expand/);
+	assert.match(text, /14 more diff lines · Ctrl\+O/);
 	assert.doesNotMatch(text, /old-18|new-19/);
 
 	const expanded = tool.renderResult?.(
@@ -617,7 +855,7 @@ test("write created stays summary when collapsed; expanded caps content lines", 
 		{ expanded: false },
 	) as { render: (w: number) => string[] };
 	const collapsedText = stripAnsi(collapsed.render(80).join("\n"));
-	assert.match(collapsedText, /created/);
+	assert.match(collapsedText, /Create/);
 	assert.match(collapsedText, /40 lines/);
 	assert.doesNotMatch(collapsedText, /line-0/);
 
@@ -634,9 +872,9 @@ test("write created stays summary when collapsed; expanded caps content lines", 
 		{ expanded: true },
 	) as { render: (w: number) => string[] };
 	const createdText = stripAnsi(created.render(80).join("\n"));
-	assert.match(createdText, /created/);
+	assert.match(createdText, /Create/);
 	assert.match(createdText, /line-0/);
-	assert.match(createdText, /showing 12 of 40 lines/);
+	assert.match(createdText, /28 more lines/);
 	assert.doesNotMatch(createdText, /line-39/);
 	// 空行也占预览配额，不能因为 filter(Boolean) 让第 13 行漏进来。
 	assert.doesNotMatch(createdText, /line-12/);
@@ -662,7 +900,7 @@ test("write created stays summary when collapsed; expanded caps content lines", 
 		{ expanded: false },
 	) as { render: (w: number) => string[] };
 	const overText = stripAnsi(overwritten.render(100).join("\n"));
-	assert.match(overText, /overwritten/);
+	assert.match(overText, /Overwrite/);
 	assert.doesNotMatch(overText, /↳ diff/);
 	// 折叠态也有少量 diff 预览
 	assert.match(overText, /▌/);
@@ -679,7 +917,7 @@ test("bash short output shows body when collapsed; long output previews", () => 
 		{ expanded: false },
 	) as { render: (w: number) => string[] };
 	const shortText = stripAnsi(short.render(80).join("\n"));
-	assert.match(shortText, /2 lines returned/);
+	assert.match(shortText, /Bash.*2 lines/);
 	assert.match(shortText, /pass/);
 
 	const longBody = Array.from({ length: 40 }, (_, i) => `line-${i}`).join("\n");
@@ -690,10 +928,11 @@ test("bash short output shows body when collapsed; long output previews", () => 
 		{ expanded: false },
 	) as { render: (w: number) => string[] };
 	const longText = stripAnsi(long.render(80).join("\n"));
-	assert.match(longText, /40 lines returned/);
-	assert.match(longText, /line-0/); // 先显示一段
-	assert.match(longText, /showing 12 of 40 lines · Ctrl\+O to expand/);
-	assert.doesNotMatch(longText, /line-39/);
+	assert.match(longText, /Bash.*40 lines/);
+	assert.match(longText, /line-36/); // 成功命令优先显示末尾摘要
+	assert.match(longText, /36 more lines · Ctrl\+O/);
+	assert.match(longText, /line-39/);
+	assert.doesNotMatch(longText, /line-0(?:\n|$)/);
 
 	const empty = tool.renderResult?.(
 		{ content: [{ type: "text", text: "" }] },
@@ -710,7 +949,7 @@ test("bash short output shows body when collapsed; long output previews", () => 
 		{ isError: true },
 	) as { render: (w: number) => string[] };
 	assert.match(stripAnsi(failed.render(80).join("\n")), /fail-first/);
-	assert.doesNotMatch(stripAnsi(failed.render(80).join("\n")), /\nrest/);
+	assert.match(stripAnsi(failed.render(80).join("\n")), /\n┃ rest/);
 });
 
 
@@ -770,7 +1009,7 @@ test("ls renderer shows path, typed entries, truncation, empty and error states"
 		{ cwd: "/tmp" },
 	) as { render: (w: number) => string[] };
 	const callText = stripAnsi(call.render(80).join("\n"));
-	assert.match(callText, /ls/);
+	assert.match(callText, /Ls/);
 	assert.match(callText, /src/);
 	assert.match(callText, /glob: \*\.ts/);
 	assert.match(callText, /limit: 5/);
@@ -789,10 +1028,11 @@ test("ls renderer shows path, typed entries, truncation, empty and error states"
 		{ expanded: false },
 	) as { render: (w: number) => string[] };
 	const collapsedText = stripAnsi(collapsed.render(80).join("\n"));
-	assert.match(collapsedText, /20 entries returned/);
+	assert.match(collapsedText, /20 entries/);
 	assert.match(collapsedText, /▸ src\//);
 	assert.match(collapsedText, /file-1\.ts/);
-	assert.match(collapsedText, /Ctrl\+O to expand/);
+	assert.match(collapsedText, /Ctrl\+O/);
+	assert.match(collapsedText, /12 more entries/);
 	assert.doesNotMatch(collapsedText, /file-19\.ts/);
 
 	const expanded = tool.renderResult?.(
@@ -814,7 +1054,7 @@ test("ls renderer shows path, typed entries, truncation, empty and error states"
 		theme,
 		{},
 	) as { render: (w: number) => string[] };
-	assert.match(stripAnsi(empty.render(80).join("\n")), /empty directory/);
+	assert.match(stripAnsi(empty.render(80).join("\n")), /Ls.*empty/);
 
 	const failed = tool.renderResult?.(
 		{ content: [{ type: "text", text: "permission denied\nextra detail" }], isError: true },
@@ -838,7 +1078,7 @@ test("ls renderer shows path, typed entries, truncation, empty and error states"
 	assertNoOverflow(wideName.render(40), 40);
 });
 
-test("DiffBodyComponent and tool renders stay within 40/80/100/120 columns", () => {
+test("DiffBodyComponent and tool renders stay within 40/60/80/100/120/160 columns", () => {
 	const diff = new DiffBodyComponent({
 		prefixLines: ["↳ edited +1 -1"],
 		diffData: {
@@ -852,7 +1092,7 @@ test("DiffBodyComponent and tool renders stay within 40/80/100/120 columns", () 
 		expanded: true,
 	});
 
-	for (const width of [40, 80, 100, 120]) {
+	for (const width of [40, 60, 80, 100, 120, 160]) {
 		assertNoOverflow(diff.render(width), width);
 	}
 
@@ -877,7 +1117,7 @@ test("DiffBodyComponent and tool renders stay within 40/80/100/120 columns", () 
 		{ expanded: true },
 	) as { render: (w: number) => string[] };
 
-	for (const width of [40, 80, 100, 120]) {
+	for (const width of [40, 60, 80, 100, 120, 160]) {
 		assertNoOverflow(component.render(width), width);
 	}
 });
