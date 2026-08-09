@@ -2,19 +2,18 @@
 
 一个面向 [Pi](https://github.com/badlogic/pi-mono) coding agent 的 TUI 扩展。
 
-本项目以 [`pi-vibrant-footer`](https://github.com/Jielumoon/pi-vibrant-footer) 为功能基线，保留 Footer、上下文、usage、Blackhole 和设置系统，同时加入 Sakura 风格的 Thought trail 与工作状态 Shimmer。
+本项目以 [`pi-vibrant-footer`](https://github.com/Jielumoon/pi-vibrant-footer) 为功能基线，保留 Footer、上下文、usage、Blackhole 和设置系统，并以 Sakura Quiet 视觉语言统一消息、工具与工作状态。Thought trail 保持原有 Sakura 树形设计。
 
 ## 特性
 
 ### Footer 与上下文
 
-- 路径、分支、会话、Provider、Model、Thinking level
-- 上下文用量彩条、百分比和 token 窗口
-- 输入/输出 token、缓存读写、缓存命中率和费用
-- 会话耗时、扩展状态以及 Blackhole O/R/P/C 指标
+- 第一行以稳定左右锚点展示路径、分支、会话与 Provider、Model、Thinking level
+- 第二行展示输入/输出 token、缓存、费用、订阅额度与会话耗时
+- 上下文使用 8–20 列前景色 compact gauge，不再绘制全宽背景色块或在 Footer 重复百分比
+- Blackhole 有可用快照时始终显示；扩展与 planning 仍仅在活动或异常时增加状态行
 - 保留原版 Footer 的显示设置和持久化配置
-- 彩条使用背景色块渲染，低用量时仍保持稳定布局
-- 订阅额度作为会话统计的一部分，紧跟费用 / `sub`、位于会话时长前；周窗口统一显示为 `7d`
+- 订阅额度紧跟费用 / `sub`；周窗口统一显示为 `7d`
 
 ### Thought trail
 
@@ -25,26 +24,27 @@
 
 ### Sakura 消息样式
 
-- 用户消息使用 Sakura 风格边框和 macaron Markdown 配色
-- 工具调用与 Bash 执行使用卡片边框和状态提示
+- 用户消息使用无标题 Sakura 完整圆框，粉色粗 `▌` rail 位于框内，和工具状态卡保持明确区别
+- read 保持无框并左缩进 2 格；其它工具把唯一 canonical header 嵌入 Sakura 上边框，溢出时以 `…` 收束并始终保留右侧封口横线
+- 工具框剥离 Pi 默认背景色；存在正文时，标题上框下固定保留一行内边距
+- Read 默认单行；Edit/Overwrite 按需预览 diff；Bash 成功显示尾部摘要、失败保留错误 rail；Ctrl+O 展开完整内容
 - 助手正文与 Thought trail 保持干净的无包围框布局
 
 ### Sakura 输入框
 
 - Pi 原生编辑器外包一层 Sakura macaron 圆角框
 - 保留补全、粘贴、历史、Esc 中断和全部 Pi 快捷键
-- 窄终端自动回退原生样式；发现其它扩展已接管 Editor 时自动让位
+- 小于 7 列时安全回退原生 Editor，避免双宽字符与光标触发换行递归；发现其它扩展接管 Editor 时自动让位
 
-### 工作状态 Shimmer
+### 工作状态
 
 - 工作中使用 Pi 原生 Braille spinner：
   `⠋ ⠙ ⠹ ⠸ ⠼ ⠴ ⠦ ⠧ ⠇ ⠏`
-- 工作文案为 `Working (Ns · esc to interrupt)`
-- Working、retry countdown 和 context compaction 共用 Thought trail 的 Sakura macaron 色板
-- 渐变以较慢的节奏移动，spinner 仍保持独立的原生转圈速度
-- agent 完成后追加与 Thought trail 对齐的 `Worked for Ns` transcript 行
+- Working、运行中工具、retry 与 compaction 共享 Sakura macaron Braille spinner；其它文字保持静止
+- retry countdown 与 context compaction 同样只动画 spinner，避免整句 shimmer
+- 5 秒以内任务不写 transcript；长任务完成后追加 dim `· Ns`
 
-输入框使用 Sakura 圆角框；工具内容仍由 Pi 原生组件负责，只增加消息卡片样式。
+输入框保留 Sakura 圆角框；工具执行逻辑保持 Pi/readmap 原样，本扩展只接管 renderer 与折叠展示。
 
 ## 安装
 
@@ -96,6 +96,8 @@ pi -e /home/jielumoon/opt/projects/pi-tui/pi-jielumoon
 /jielumoon-tui blackhole off
 /jielumoon-tui plan off
 ```
+
+其中 `context` 开关直接控制 Editor 下方的 Nano context 紧凑用量条，不再是无效的 Footer 遗留选项。
 
 设置会保存到 Pi agent 目录的 `pi-vibrant-footer.json`，用于兼容原版 Footer 配置。默认路径通常是：
 
