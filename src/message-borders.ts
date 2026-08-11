@@ -20,6 +20,10 @@ import { resolveRenderMode } from "./render-mode";
 
 type Cleanup = () => void;
 type RenderedLines = string[];
+type MessageBorderSettings = {
+	toolBackground: boolean;
+};
+type ToolBackground = "toolPendingBg" | "toolSuccessBg" | "toolErrorBg";
 
 type ToolRuntime = {
 	isPartial?: boolean;
@@ -50,6 +54,8 @@ type ToolRenderCache = {
 	result: ToolRuntime["result"];
 	expanded: boolean;
 	showImages: boolean;
+	toolBackground: boolean;
+	theme: Theme | undefined;
 	lines: RenderedLines;
 };
 
@@ -68,6 +74,8 @@ type BashRenderCache = {
 	lastOutputLine: string | undefined;
 	status: BashRuntime["status"];
 	expanded: boolean;
+	toolBackground: boolean;
+	theme: Theme | undefined;
 	lines: RenderedLines;
 };
 
@@ -78,7 +86,7 @@ const bashRenderCache = new WeakMap<object, BashRenderCache>();
 
 const MIN_RAIL_WIDTH = 7;
 const READ_INDENT_WIDTH = 2;
-const TOOL_FRAME_CHROME_WIDTH = 3;
+const TOOL_FRAME_CHROME_WIDTH = 2;
 const OSC133_ZONE_START = "\x1b]133;A\x07";
 const OSC133_ZONE_END = "\x1b]133;B\x07";
 const OSC133_ZONE_FINAL = "\x1b]133;C\x07";
@@ -177,6 +185,19 @@ function themeFg(theme: Theme | undefined, color: ThemeColor, text: string): str
 	if (!theme) return text;
 	try {
 		return theme.fg(color, text);
+	} catch {
+		return text;
+	}
+}
+
+function toolBackgroundForState(state: "running" | "success" | "error" | "cancelled"): ToolBackground {
+	return state === "running" ? "toolPendingBg" : state === "success" ? "toolSuccessBg" : "toolErrorBg";
+}
+
+function themeBg(theme: Theme | undefined, color: ToolBackground, text: string): string {
+	if (!theme) return text;
+	try {
+		return theme.bg(color, text);
 	} catch {
 		return text;
 	}
@@ -287,10 +308,10 @@ function bottomBorder(width: number): string {
 }
 
 function stateRail(state: "running" | "success" | "error" | "cancelled"): string {
-	if (state === "running") return rgbForeground(RAIL_WORKING, "┃ ");
-	if (state === "error") return rgbForeground(RAIL_ERROR, "┃ ");
-	if (state === "cancelled") return rgbForeground(RAIL_CANCELLED, "┃ ");
-	return rgbForeground(RAIL_SUCCESS, "┃ ");
+	if (state === "running") return rgbForeground(RAIL_WORKING, "┃");
+	if (state === "error") return rgbForeground(RAIL_ERROR, "┃");
+	if (state === "cancelled") return rgbForeground(RAIL_CANCELLED, "┃");
+	return rgbForeground(RAIL_SUCCESS, "┃");
 }
 
 const LEADING_STATE_MARKER = /^(?:\x1b\[[0-?]*[ -/]*[@-~])*[◇✓×!·⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏](?:\x1b\[[0-?]*[ -/]*[@-~])*\s+/;
@@ -307,6 +328,8 @@ function frameBody(
 	body: string[],
 	width: number,
 	state: "running" | "success" | "error" | "cancelled",
+	theme: Theme | undefined,
+	showToolBackground: boolean,
 ): RenderedLines {
 	const content = [...body];
 	const headerIndex = content.findIndex((line) => !isBlank(line));
@@ -314,11 +337,20 @@ function frameBody(
 	while (content[0] !== undefined && isBlank(content[0])) content.shift();
 	const leftRail = stateRail(state);
 	const rightRail = renderSakuraSolid("│");
-	const spacedContent = content.length > 0 ? ["", ...content] : content;
+	const background = toolBackgroundForState(state);
+	const innerWidth = Math.max(0, width - visibleWidth(leftRail) - visibleWidth(rightRail));
+	const renderContentLine = (line: string): string => {
+		if (!showToolBackground) return renderBoxedLine(line, width, leftRail, rightRail);
+		const inner = renderBoxedLine(line, innerWidth, "", "");
+		return `${leftRail}${themeBg(theme, background, inner)}${rightRail}`;
+	};
+	const spacedContent = showToolBackground
+		? content.length > 0 ? ["", ...content, ""] : [""]
+		: content.length > 0 ? ["", ...content] : content;
 	return [
 		...prefix,
 		titleBorder(title, width),
-		...spacedContent.map((line) => renderBoxedLine(line, width, leftRail, rightRail)),
+		...spacedContent.map(renderContentLine),
 		truncateToWidth(renderSakuraFrameGradient(bottomBorder(width)), width, ""),
 	];
 }
@@ -337,7 +369,13 @@ function stripOuterChrome(lines: RenderedLines): { prefix: string[]; body: strin
 	return { prefix, body };
 }
 
-function decorateToolMessage(lines: RenderedLines, width: number, runtime: ToolRuntime): RenderedLines {
+function decorateToolMessage(
+	lines: RenderedLines,
+	width: number,
+	runtime: ToolRuntime,
+	theme: Theme | undefined,
+	showToolBackground: boolean,
+): RenderedLines {
 	const isRead = runtime.toolName === "read";
 	if (
 		resolveRenderMode() !== "color" ||
@@ -363,10 +401,16 @@ function decorateToolMessage(lines: RenderedLines, width: number, runtime: ToolR
 			return truncateToWidth(`  ${line}`, width, "");
 		});
 	}
-	return frameBody(prefix, body, width, state);
+	return frameBody(prefix, body, width, state, theme, showToolBackground);
 }
 
-function decorateBashMessage(lines: RenderedLines, width: number, runtime: BashRuntime): RenderedLines {
+function decorateBashMessage(
+	lines: RenderedLines,
+	width: number,
+	runtime: BashRuntime,
+	theme: Theme | undefined,
+	showToolBackground: boolean,
+): RenderedLines {
 	if (resolveRenderMode() !== "color" || width <= 2 || lines.length === 0 || containsTerminalImage(lines)) return lines;
 
 	const { prefix, body: nativeBody } = stripOuterChrome(lines);
@@ -396,10 +440,13 @@ function decorateBashMessage(lines: RenderedLines, width: number, runtime: BashR
 		if (state === "cancelled" && plain === "(cancelled)") return false;
 		return true;
 	});
-	return frameBody(prefix, settledBody, width, state);
+	return frameBody(prefix, settledBody, width, state, theme, showToolBackground);
 }
 
-export function installMessageBorders(getTheme: () => Theme | undefined): Cleanup {
+export function installMessageBorders(
+	getTheme: () => Theme | undefined,
+	settings: MessageBorderSettings = { toolBackground: false },
+): Cleanup {
 	const cleanupUserMessage = installPrototypePatch(
 		UserMessageComponent.prototype,
 		"render",
@@ -430,6 +477,7 @@ export function installMessageBorders(getTheme: () => Theme | undefined): Cleanu
 			const runtime = receiver as ToolRuntime;
 			const width = args[0];
 			const decorative = resolveRenderMode() === "color";
+			const theme = decorative ? getTheme() : undefined;
 			if (
 				decorative &&
 				typeof width === "number" &&
@@ -444,7 +492,9 @@ export function installMessageBorders(getTheme: () => Theme | undefined): Cleanu
 					cached.width === width &&
 					cached.result === runtime.result &&
 					cached.expanded === Boolean(runtime.expanded) &&
-					cached.showImages === Boolean(runtime.showImages)
+					cached.showImages === Boolean(runtime.showImages) &&
+					cached.toolBackground === settings.toolBackground &&
+					cached.theme === theme
 				) {
 					return cached.lines;
 				}
@@ -454,7 +504,7 @@ export function installMessageBorders(getTheme: () => Theme | undefined): Cleanu
 			const renderArgs = contentWidth === width ? args : [contentWidth, ...args.slice(1)];
 			const rendered = Reflect.apply(predecessor, receiver, renderArgs);
 			if (!isRenderedLines(rendered) || typeof width !== "number") return rendered;
-			const framed = decorateToolMessage(rendered, width, runtime);
+			const framed = decorateToolMessage(rendered, width, runtime, theme, settings.toolBackground);
 			if (
 				decorative &&
 				isObject(receiver) &&
@@ -468,6 +518,8 @@ export function installMessageBorders(getTheme: () => Theme | undefined): Cleanu
 					result: runtime.result,
 					expanded: Boolean(runtime.expanded),
 					showImages: Boolean(runtime.showImages),
+					toolBackground: settings.toolBackground,
+					theme,
 					lines: framed,
 				});
 			}
@@ -510,6 +562,7 @@ export function installMessageBorders(getTheme: () => Theme | undefined): Cleanu
 			const runtime = receiver as BashRuntime;
 			const width = args[0];
 			const decorative = resolveRenderMode() === "color";
+			const theme = decorative ? getTheme() : undefined;
 			const outputLines = runtime.outputLines;
 			const outputLength = outputLines?.length ?? 0;
 			const lastOutputLine = outputLines?.at(-1);
@@ -523,7 +576,9 @@ export function installMessageBorders(getTheme: () => Theme | undefined): Cleanu
 					cached.outputLength === outputLength &&
 					cached.lastOutputLine === lastOutputLine &&
 					cached.status === runtime.status &&
-					cached.expanded === Boolean(runtime.expanded)
+					cached.expanded === Boolean(runtime.expanded) &&
+					cached.toolBackground === settings.toolBackground &&
+					cached.theme === theme
 				) {
 					return cached.lines;
 				}
@@ -533,7 +588,7 @@ export function installMessageBorders(getTheme: () => Theme | undefined): Cleanu
 			const renderArgs = contentWidth === width ? args : [contentWidth, ...args.slice(1)];
 			const rendered = Reflect.apply(predecessor, receiver, renderArgs);
 			if (!isRenderedLines(rendered) || typeof width !== "number") return rendered;
-			const repainted = decorateBashMessage(rendered, width, runtime);
+			const repainted = decorateBashMessage(rendered, width, runtime, theme, settings.toolBackground);
 			if (decorative && isObject(receiver) && settled) {
 				bashRenderCache.set(receiver, {
 					width,
@@ -542,6 +597,8 @@ export function installMessageBorders(getTheme: () => Theme | undefined): Cleanu
 					lastOutputLine,
 					status: runtime.status,
 					expanded: Boolean(runtime.expanded),
+					toolBackground: settings.toolBackground,
+					theme,
 					lines: repainted,
 				});
 			}
@@ -573,20 +630,20 @@ export function installMessageBorders(getTheme: () => Theme | undefined): Cleanu
 	};
 }
 
-export default function jielumoonMessageBorders(pi: ExtensionAPI): void {
+export default function jielumoonMessageBorders(
+	pi: ExtensionAPI,
+	settings: MessageBorderSettings = { toolBackground: false },
+): void {
 	let cleanup: Cleanup | undefined;
-	let activeTheme: Theme | undefined;
 
 	pi.on("session_start", (_event, ctx: ExtensionContext) => {
 		if (ctx.mode !== "tui" || cleanup) return;
-		activeTheme = ctx.ui.theme;
-		cleanup = installMessageBorders(() => activeTheme);
+		cleanup = installMessageBorders(() => ctx.ui.theme, settings);
 	});
 
 	pi.on("session_shutdown", (_event, ctx: ExtensionContext) => {
 		if (ctx.mode !== "tui") return;
 		cleanup?.();
 		cleanup = undefined;
-		activeTheme = undefined;
 	});
 }

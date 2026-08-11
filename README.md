@@ -26,7 +26,7 @@
 
 - 用户消息使用无标题 Sakura 完整圆框，粉色粗 `▌` rail 位于框内，和工具状态卡保持明确区别
 - read 保持无框并左缩进 2 格；其它工具把唯一 canonical header 嵌入 Sakura 上边框，溢出时以 `…` 收束并始终保留右侧封口横线
-- 工具框剥离 Pi 默认背景色；存在正文时，标题上框下固定保留一行内边距
+- 工具框默认剥离 Pi 默认背景色；可通过“工具状态底色”开关恢复按运行状态变化的主题底色，Read 和图片旁路保持无底色
 - Read 默认单行；Edit/Overwrite 按需预览 diff；Bash 成功显示尾部摘要、失败保留错误 rail；Ctrl+O 展开完整内容
 - 助手正文与 Thought trail 保持干净的无包围框布局
 
@@ -82,6 +82,8 @@ pi -e /home/jielumoon/opt/projects/pi-tui/pi-jielumoon
 /jielumoon-tui on                    启用 Jielumoon Footer
 /jielumoon-tui off                   恢复 Pi 默认 Footer
 /jielumoon-tui toggle                切换 Footer 开关
+/jielumoon-tui tool-bg on          显示有框工具的状态底色
+/jielumoon-tui tool-bg off         隐藏有框工具的状态底色
 /jielumoon-tui reset                 恢复默认显示项
 /jielumoon-tui planning on           显示右侧计划阶段状态
 /jielumoon-tui planning off          隐藏右侧计划阶段状态
@@ -98,6 +100,9 @@ pi -e /home/jielumoon/opt/projects/pi-tui/pi-jielumoon
 ```
 
 其中 `context` 开关直接控制 Editor 下方的 Nano context 紧凑用量条，不再是无效的 Footer 遗留选项。
+
+`tool-bg` 只在 color 模式下生效：运行中、成功、失败分别使用 Pi 主题的 `toolPendingBg`、`toolSuccessBg`、`toolErrorBg`，不改变 Sakura 边框。
+也可直接在该 JSON 中设置 `"toolBackground": true`。
 
 设置会保存到 Pi agent 目录的 `pi-vibrant-footer.json`，用于兼容原版 Footer 配置。默认路径通常是：
 

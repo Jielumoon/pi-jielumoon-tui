@@ -16,7 +16,7 @@ export default function jielumoonTui(pi: ExtensionAPI): void {
 	const subscriptionUsage = installSubscriptionUsage(pi);
 	installFooter(pi, subscriptionUsage, footerSettings);
 	installThinking(pi);
-	installMessageBorders(pi);
+	installMessageBorders(pi, footerSettings);
 	installWorking(pi);
 	installSakuraEditor(pi);
 	installReadmapRenderers(pi);

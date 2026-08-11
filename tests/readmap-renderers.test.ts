@@ -546,12 +546,12 @@ test("read stays borderless while framed tools embed titles without native backg
 				prototype.render.call({ ...readRuntime, toolName }, 80));
 			const framedText = stripAnsi(framed.join("\n"));
 			assert.match(framedText, new RegExp(`^╭─ ✓ ${label}  target ─+╮`));
-			assert.match(framedText, /\n┃\s+│\n┃ body\s+│\n╰─+╯$/);
+			assert.match(framedText, /\n┃\s+│\n┃body\s+│\n╰─+╯$/);
 			assert.equal(framedText.match(new RegExp(label, "g"))?.length, 1);
 			assert.doesNotMatch(framed.join("\n"), /\x1b\[(?:48[;:]|49m)/);
 			assert.match(framed.join("\n"), /\x1b\[38;2;1;2;3m/);
 			assertNoOverflow(framed, 80);
-			assert.equal(predecessorWidth, 77, `${toolName} 外框的 3 列 chrome 必须先从正文宽度预算中扣除`);
+			assert.equal(predecessorWidth, 78, `${toolName} 外框的 2 列 chrome 必须先从正文宽度预算中扣除`);
 		}
 
 		const splitRightText = "在已完成的视觉研究基础上，连续实施 Sakura Quiet 的 P0、P1、P2 改造；保持 Thinking 完全不动，并完成全量验证与工作记录。";
@@ -578,13 +578,13 @@ test("read stays borderless while framed tools embed titles without native backg
 		const splitPaneWidth = Math.floor((predecessorWidth - 3) / 2);
 		const reconstructedRight = splitFrame
 			.map(stripAnsi)
-			.filter((line) => line.startsWith("┃ "))
-			.map((line) => line.slice(2, -1))
+			.filter((line) => line.startsWith("┃"))
+			.map((line) => line.slice(1, -1))
 			.map((line) => line.slice(splitPaneWidth + 3))
 			.map((line) => line.replace(/^▌\+\s+\d+\s+│\s*/, "").trim())
 			.join("")
 			.replace(/\s+/g, "");
-		assert.equal(predecessorWidth, 178);
+		assert.equal(predecessorWidth, 179);
 		assert.equal(reconstructedRight, splitRightText.replace(/\s+/g, ""));
 		assertNoOverflow(splitFrame, 181);
 
@@ -659,6 +659,145 @@ test("read stays borderless while framed tools embed titles without native backg
 		prototype.render = originalRender;
 	}
 });
+test("tool status background is optional, semantic, and cache-aware", () => {
+	type ToolPrototype = { render(this: unknown, width: number): string[] };
+	const prototype = ToolExecutionComponent.prototype as unknown as ToolPrototype;
+	const originalRender = prototype.render;
+	let renderBody = (_width: number): string[] => ["✓ Edit  target", "body"];
+	const backgroundCalls: string[] = [];
+	const makeBackgroundTheme = (code: number) => ({
+		...theme,
+		bg: (color: string, text: string) => {
+			backgroundCalls.push(color);
+			return `\x1b[48;5;${code}m${text}\x1b[49m`;
+		},
+	});
+	const backgroundTheme = makeBackgroundTheme(240);
+	const alternateTheme = makeBackgroundTheme(241);
+	let currentTheme = backgroundTheme;
+	const settings = { toolBackground: false };
+	prototype.render = function renderForBackground(width: number): string[] {
+		return renderBody(width);
+	};
+	const cleanup = installMessageBorders(() => currentTheme as never, settings);
+
+	try {
+		const runtime = {
+			isPartial: false,
+			result: { isError: false, content: [{ type: "text" }] },
+			toolName: "edit",
+			hideComponent: false,
+			expanded: false,
+			showImages: false,
+		};
+		const withoutBackground = withEnv("PI_READMAP_RENDER_MODE", "color", () =>
+			prototype.render.call(runtime, 80));
+		assert.doesNotMatch(withoutBackground.join("\n"), /\x1b\[48[;:]/);
+
+		settings.toolBackground = true;
+		const withBackground = withEnv("PI_READMAP_RENDER_MODE", "color", () =>
+			prototype.render.call(runtime, 80));
+		assert.ok(withBackground.slice(1, -1).every((line) => /\x1b\[48;5;240m/.test(line)));
+		assert.equal(withBackground.length, 5);
+		assert.ok(withBackground.every((line) => visibleWidth(line) === 80), "background frame must stay exactly within the requested width");
+		for (const line of withBackground.slice(1, -1)) {
+			const backgroundStart = line.indexOf("\x1b[48;5;240m");
+			const backgroundEnd = line.indexOf("\x1b[49m", backgroundStart);
+			assert.ok(backgroundStart >= 0 && backgroundEnd >= 0);
+			assert.equal(visibleWidth(line.slice(0, backgroundStart)), 1, "background must start after the left rail");
+			assert.equal(visibleWidth(line.slice(backgroundEnd + "\x1b[49m".length)), 1, "background must end before the right rail");
+		}
+		assert.match(stripAnsi(withBackground.at(-2) ?? ""), /^┃\s+│$/, "framed tools keep a padded row above the bottom border");
+		assert.doesNotMatch(withBackground[0] ?? "", /\x1b\[48[;:]/);
+		assert.doesNotMatch(withBackground.at(-1) ?? "", /\x1b\[48[;:]/);
+		assert.ok(backgroundCalls.includes("toolSuccessBg"));
+
+		currentTheme = alternateTheme;
+		const withAlternateTheme = withEnv("PI_READMAP_RENDER_MODE", "color", () =>
+			prototype.render.call(runtime, 80));
+		assert.match(withAlternateTheme.join("\n"), /\x1b\[48;5;241m/);
+		assert.doesNotMatch(withAlternateTheme.join("\n"), /\x1b\[48;5;240m/);
+		currentTheme = backgroundTheme;
+
+		settings.toolBackground = false;
+		const afterToggleOff = withEnv("PI_READMAP_RENDER_MODE", "color", () =>
+			prototype.render.call(runtime, 80));
+		assert.doesNotMatch(afterToggleOff.join("\n"), /\x1b\[48[;:]/);
+
+		backgroundCalls.length = 0;
+		const plain = withEnv("PI_READMAP_RENDER_MODE", "plain", () =>
+			prototype.render.call(runtime, 80));
+		assert.deepEqual(plain, ["✓ Edit  target", "body"]);
+		assert.deepEqual(backgroundCalls, []);
+
+		backgroundCalls.length = 0;
+		settings.toolBackground = true;
+		renderBody = () => ["✓ Read  target", "body"];
+		const read = withEnv("PI_READMAP_RENDER_MODE", "color", () =>
+			prototype.render.call({ ...runtime, toolName: "read" }, 80));
+		assert.doesNotMatch(read.join("\n"), /\x1b\[48[;:]/);
+		assert.deepEqual(backgroundCalls, []);
+
+		backgroundCalls.length = 0;
+		renderBody = () => ["◇ Edit  target", "body"];
+		const running = withEnv("PI_READMAP_RENDER_MODE", "color", () =>
+			prototype.render.call({ ...runtime, isPartial: true, result: undefined }, 80));
+		assert.match(running.join("\n"), /\x1b\[48;5;240m/);
+		assert.ok(backgroundCalls.some((call) => call === "toolPendingBg"));
+
+		backgroundCalls.length = 0;
+		const failed = withEnv("PI_READMAP_RENDER_MODE", "color", () =>
+			prototype.render.call({
+				...runtime,
+				result: { isError: true, content: [{ type: "text" }] },
+			}, 80));
+		assert.match(failed.join("\n"), /\x1b\[48;5;240m/);
+		assert.ok(backgroundCalls.some((call) => call === "toolErrorBg"));
+	} finally {
+		cleanup();
+		prototype.render = originalRender;
+	}
+});
+test("tool status background covers Bash success and cancellation at supported widths", () => {
+	type RenderPrototype = { render(this: unknown, width: number): string[] };
+	const bashPrototype = BashExecutionComponent.prototype as unknown as RenderPrototype;
+	const originalRender = bashPrototype.render;
+	const backgroundCalls: string[] = [];
+	const backgroundTheme = {
+		...theme,
+		bg: (color: string, text: string) => {
+			backgroundCalls.push(color);
+			return `\x1b[48;5;242m${text}\x1b[49m`;
+		},
+	};
+	const settings = { toolBackground: true };
+	bashPrototype.render = () => ["", "✓ Bash  echo hi", "output", "────"];
+	const cleanup = installMessageBorders(() => backgroundTheme as never, settings);
+
+	try {
+		for (const [status, expectedBackground] of [["complete", "toolSuccessBg"], ["cancelled", "toolErrorBg"]] as const) {
+			for (const width of [40, 80, 160]) {
+				backgroundCalls.length = 0;
+				const lines = withEnv("PI_READMAP_RENDER_MODE", "color", () =>
+					bashPrototype.render.call({
+						status,
+						command: "echo hi",
+						outputLines: ["output"],
+						expanded: false,
+					}, width));
+				const backgroundLines = lines.filter((line) => line.includes("\x1b[48;5;242m"));
+				assert.ok(backgroundLines.length > 0);
+				assert.ok(backgroundCalls.includes(expectedBackground));
+				assert.doesNotMatch(lines[1] ?? "", /\x1b\[48[;:]/, "标题上框不能带状态底色");
+				assert.doesNotMatch(lines.at(-1) ?? "", /\x1b\[48[;:]/, "底框不能带状态底色");
+				assert.ok(lines.every((line) => visibleWidth(line) <= width));
+			}
+		}
+	} finally {
+		cleanup();
+		bashPrototype.render = originalRender;
+	}
+});
 
 test("user messages use a titleless rail frame distinct from tool cards", () => {
 	type RenderPrototype = { render(this: unknown, width: number): string[] };
@@ -717,10 +856,10 @@ test("user messages use a titleless rail frame distinct from tool cards", () => 
 		assert.doesNotMatch(bashLines.join("\n"), /\x1b\[(?:48[;:]|49m)/);
 		assert.doesNotMatch(bashText, /┃ × Bash/);
 		assert.match(bashText, /\n╰─+╯$/);
-		assert.match(bashText, /\n┃\s+─{3,}\s+│\n╰─+╯$/, "真实水平线输出不能被当成宿主下框删除");
+		assert.match(bashText, /\n┃\s*─{3,}\s+│\n╰─+╯$/, "真实水平线输出不能被当成宿主下框删除");
 		assert.doesNotMatch(bashText, /\(exit 1\)/);
 		assertNoOverflow(bashLines, 80);
-		assert.equal(bashPredecessorWidth, 77, "Bash 外框的 3 列 chrome 必须先从正文宽度预算中扣除");
+		assert.equal(bashPredecessorWidth, 78, "Bash 外框的 2 列 chrome 必须先从正文宽度预算中扣除");
 	} finally {
 		cleanup();
 		userPrototype.render = originalUserRender;

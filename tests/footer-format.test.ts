@@ -6,6 +6,7 @@ import { renderFooter } from "../src/footer/render.ts";
 import installNanoContext, { renderContextLine, type ContextSnapshot } from "../src/nano-context.ts";
 import {
 	DEFAULT_FOOTER_SETTINGS,
+	FOOTER_SETTING_DEFINITIONS,
 	type FooterSnapshot,
 	type FooterTheme,
 	type IconSet,
@@ -141,6 +142,13 @@ test("nano context follows the shared Footer context setting", () => {
 	assert.equal(widget.render(80).length, 1);
 	settings.context = false;
 	assert.deepEqual(widget.render(80), []);
+});
+
+test("tool background setting defaults off and exposes the command alias", () => {
+	const definition = FOOTER_SETTING_DEFINITIONS.find((item) => item.key === "toolBackground");
+	assert.ok(definition);
+	assert.equal(DEFAULT_FOOTER_SETTINGS.toolBackground, false);
+	assert.deepEqual(definition.aliases, ["tool-bg"]);
 });
 
 test("footer omits an empty identity row when the selected model is unavailable", () => {
