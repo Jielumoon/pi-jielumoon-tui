@@ -116,6 +116,17 @@ export function renderSakuraFrameGradient(text: string): string {
 	return rendered;
 }
 
+/** Render a frame with static corners; only the horizontal interior uses the gradient. */
+export function renderSakuraFrameBorder(text: string): string {
+	const chars = [...text];
+	if (chars.length === 0) return text;
+	if (chars.length === 1) return renderSakuraSolid(chars[0] ?? "");
+	const left = renderSakuraSolid(chars[0] ?? "");
+	const interior = renderSakuraFrameGradient(chars.slice(1, -1).join(""));
+	const right = renderSakuraSolid(chars.at(-1) ?? "", 0);
+	return `${left}${interior}${right}`;
+}
+
 /** Solid sakura stop — vertical rails / corners that must match the frame ends. */
 export function renderSakuraSolid(text: string, position = 0): string {
 	return rgbForeground(sampleSakuraGradient(position), text);
@@ -224,30 +235,32 @@ export function renderBoxedLine(
 	rightRail: string,
 ): string {
 	if (width <= 0) return "";
+	const targetWidth = Math.max(0, Math.floor(width));
 	const leftWidth = visibleWidth(leftRail);
 	const rightWidth = visibleWidth(rightRail);
 	// If rails alone exceed width, prefer left rail only.
-	if (leftWidth + rightWidth > width) {
-		return truncateToWidth(leftRail, width, "");
+	if (leftWidth + rightWidth > targetWidth) {
+		return truncateToWidth(leftRail, targetWidth, "");
 	}
-	const innerWidth = Math.max(0, width - leftWidth - rightWidth);
-	// Never use default truncate ellipsis ("...") — empty string only.
+	const innerWidth = Math.max(0, targetWidth - leftWidth - rightWidth);
+	// Never use default truncate ellipsis ("...") — outer truncate defaults to "..." and looks like junk on every row.
 	// Also drop only a pure trailing ... marker from prior truncators (not mid-line).
 	let plainish = line;
 	if (/(?:…|\.\.\.)\s*$/u.test(plainish) && visibleWidth(plainish) >= innerWidth) {
 		plainish = plainish.replace(/(?:…|\.\.\.)\s*$/u, "");
 	}
 	let content = truncateToWidth(plainish, innerWidth, "");
-	// Hard-fit: SGR / width drift can leave content 1 cell over.
+	// Hard-fit the body while keeping the right rail outside the truncation boundary.
 	let guard = 0;
 	while (visibleWidth(content) > innerWidth && content.length > 0 && guard++ < 8) {
 		content = truncateToWidth(content, Math.max(0, visibleWidth(content) - 1), "");
 	}
 	const pad = Math.max(0, innerWidth - visibleWidth(content));
 	const out = `${leftRail}${content}${" ".repeat(pad)}${rightRail}`;
-	// Final clamp without ellipsis if still over (should be rare).
-	if (visibleWidth(out) > width) {
-		return truncateToWidth(out, width, "");
-	}
-	return out;
+	if (visibleWidth(out) <= targetWidth) return out;
+
+	// Do not truncate the complete line: that can eat the right rail and leave a broken frame.
+	const safeWidth = Math.max(0, innerWidth - (visibleWidth(out) - targetWidth));
+	const safeContent = truncateToWidth(content, safeWidth, "");
+	return `${leftRail}${safeContent}${" ".repeat(Math.max(0, innerWidth - visibleWidth(safeContent)))}${rightRail}`;
 }

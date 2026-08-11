@@ -10,7 +10,7 @@ import {
 import { Markdown, type MarkdownTheme, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import {
 	renderBoxedLine,
-	renderSakuraFrameGradient,
+	renderSakuraFrameBorder,
 	renderSakuraSpinner,
 	renderSakuraSolid,
 	rgbForeground,
@@ -223,8 +223,13 @@ function makeUserMarkdownTheme(theme: Theme | undefined): MarkdownTheme {
 }
 
 function renderUserLine(line: string, width: number): string {
+	const targetWidth = frameWidth(width);
 	const outerRail = renderSakuraSolid("│");
-	return renderBoxedLine(line, width, `${outerRail} ${renderSakuraSolid("▌")} `, outerRail);
+	return renderBoxedLine(line, targetWidth, `${outerRail} ${renderSakuraSolid("▌")} `, outerRail);
+}
+
+function frameWidth(width: number): number {
+	return Math.max(0, Math.floor(width));
 }
 
 function withPromptZoneMarkers(lines: RenderedLines): RenderedLines {
@@ -242,15 +247,16 @@ function renderSakuraUserMessage(
 	theme: Theme | undefined,
 ): RenderedLines | undefined {
 	const text = receiver.text;
-	if (resolveRenderMode() !== "color" || typeof text !== "string" || width < MIN_RAIL_WIDTH) return undefined;
+	const targetWidth = frameWidth(width);
+	if (resolveRenderMode() !== "color" || typeof text !== "string" || targetWidth < MIN_RAIL_WIDTH) return undefined;
 
 	const cached = userMessageRenderCache.get(receiver as object);
-	if (cached?.text === text && cached.width === width && cached.theme === theme) return cached.lines;
+	if (cached?.text === text && cached.width === targetWidth && cached.theme === theme) return cached.lines;
 
 	const outerRail = renderSakuraSolid("│");
 	const leftRail = `${outerRail} ${renderSakuraSolid("▌")} `;
 	const rightRail = outerRail;
-	const contentWidth = Math.max(1, width - visibleWidth(leftRail) - visibleWidth(rightRail));
+	const contentWidth = Math.max(1, targetWidth - visibleWidth(leftRail) - visibleWidth(rightRail));
 	const renderer = new Markdown(
 		text,
 		0,
@@ -261,12 +267,12 @@ function renderSakuraUserMessage(
 	const rendered = renderer.render(contentWidth);
 	const contentLines = rendered.length > 0 ? rendered : [""];
 	const lines = [
-		truncateToWidth(renderSakuraFrameGradient(topBorder(width)), width, ""),
-		...contentLines.map((line) => renderUserLine(line, width)),
-		truncateToWidth(renderSakuraFrameGradient(bottomBorder(width)), width, ""),
+		renderSakuraFrameBorder(topBorder(targetWidth)),
+		...contentLines.map((line) => renderUserLine(line, targetWidth)),
+		renderSakuraFrameBorder(bottomBorder(targetWidth)),
 	];
 	const markedLines = withPromptZoneMarkers(lines);
-	userMessageRenderCache.set(receiver as object, { text, width, theme, lines: markedLines });
+	userMessageRenderCache.set(receiver as object, { text, width: targetWidth, theme, lines: markedLines });
 	return markedLines;
 }
 
@@ -283,28 +289,44 @@ function stateMarker(state: "running" | "success" | "error" | "cancelled"): stri
 }
 
 function topBorder(width: number): string {
-	if (width <= 0) return "";
-	if (width === 1) return "╭";
-	return `╭${"─".repeat(Math.max(0, width - 2))}╮`;
+	const targetWidth = frameWidth(width);
+	if (targetWidth <= 0) return "";
+	if (targetWidth === 1) return "╭";
+	return `╭${"─".repeat(Math.max(0, targetWidth - 2))}╮`;
 }
 
-function titleBorder(title: string, width: number): string {
+function renderToolFrameBorder(
+	text: string,
+	state: "running" | "success" | "error" | "cancelled",
+): string {
+	// 运行态每帧都会重绘标题。逐字符 Truecolor 会把长边框膨胀成数 KB，
+	// 某些终端会在同步刷写时闪烁；单段静态 Sakura 色只让 spinner 发生变化。
+	return state === "running" ? renderSakuraSolid(text) : renderSakuraFrameBorder(text);
+}
+
+function titleBorder(
+	title: string,
+	width: number,
+	state: "running" | "success" | "error" | "cancelled",
+): string {
+	const targetWidth = frameWidth(width);
 	const semanticTitle = trimTerminalPadding(title);
-	if (width < 8 || isBlank(semanticTitle)) {
-		return truncateToWidth(renderSakuraFrameGradient(topBorder(width)), width, "");
+	if (targetWidth < 8 || isBlank(semanticTitle)) {
+		return renderToolFrameBorder(topBorder(targetWidth), state);
 	}
 	const left = "╭─ ";
 	const minimumRight = " ─╮";
-	const titleWidth = Math.max(0, width - visibleWidth(left) - visibleWidth(minimumRight));
+	const titleWidth = Math.max(0, targetWidth - visibleWidth(left) - visibleWidth(minimumRight));
 	const fittedTitle = truncateToWidth(semanticTitle, titleWidth, "…");
-	const fillWidth = Math.max(1, width - visibleWidth(left) - visibleWidth(fittedTitle) - visibleWidth(" ╮"));
-	return `${renderSakuraFrameGradient(left)}${fittedTitle}${renderSakuraFrameGradient(` ${"─".repeat(fillWidth)}╮`)}`;
+	const fillWidth = Math.max(1, targetWidth - visibleWidth(left) - visibleWidth(fittedTitle) - visibleWidth(" ╮"));
+	return `${renderToolFrameBorder(left, state)}${fittedTitle}${renderToolFrameBorder(` ${"─".repeat(fillWidth)}╮`, state)}`;
 }
 
 function bottomBorder(width: number): string {
-	if (width <= 0) return "";
-	if (width === 1) return "╰";
-	return `╰${"─".repeat(Math.max(0, width - 2))}╯`;
+	const targetWidth = frameWidth(width);
+	if (targetWidth <= 0) return "";
+	if (targetWidth === 1) return "╰";
+	return `╰${"─".repeat(Math.max(0, targetWidth - 2))}╯`;
 }
 
 function stateRail(state: "running" | "success" | "error" | "cancelled"): string {
@@ -331,6 +353,7 @@ function frameBody(
 	theme: Theme | undefined,
 	showToolBackground: boolean,
 ): RenderedLines {
+	const targetWidth = frameWidth(width);
 	const content = [...body];
 	const headerIndex = content.findIndex((line) => !isBlank(line));
 	const title = headerIndex >= 0 ? content.splice(headerIndex, 1)[0]! : "";
@@ -338,9 +361,9 @@ function frameBody(
 	const leftRail = stateRail(state);
 	const rightRail = renderSakuraSolid("│");
 	const background = toolBackgroundForState(state);
-	const innerWidth = Math.max(0, width - visibleWidth(leftRail) - visibleWidth(rightRail));
+	const innerWidth = Math.max(0, targetWidth - visibleWidth(leftRail) - visibleWidth(rightRail));
 	const renderContentLine = (line: string): string => {
-		if (!showToolBackground) return renderBoxedLine(line, width, leftRail, rightRail);
+		if (!showToolBackground) return renderBoxedLine(line, targetWidth, leftRail, rightRail);
 		const inner = renderBoxedLine(line, innerWidth, "", "");
 		return `${leftRail}${themeBg(theme, background, inner)}${rightRail}`;
 	};
@@ -349,9 +372,9 @@ function frameBody(
 		: content.length > 0 ? ["", ...content] : content;
 	return [
 		...prefix,
-		titleBorder(title, width),
+		titleBorder(title, targetWidth, state),
 		...spacedContent.map(renderContentLine),
-		truncateToWidth(renderSakuraFrameGradient(bottomBorder(width)), width, ""),
+		renderToolFrameBorder(bottomBorder(targetWidth), state),
 	];
 }
 

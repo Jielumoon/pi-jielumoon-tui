@@ -799,6 +799,57 @@ test("tool status background covers Bash success and cancellation at supported w
 	}
 });
 
+test("running tool frames keep wide styled borders stable and low-churn", () => {
+	type ToolPrototype = { render(this: unknown, width: number): string[] };
+	const prototype = ToolExecutionComponent.prototype as unknown as ToolPrototype;
+	const originalRender = prototype.render;
+	const frameTheme = {
+		...theme,
+		bg: (_color: string, text: string) => `\x1b[48;5;240m${text}\x1b[49m`,
+	};
+	prototype.render = () => [
+		"",
+		"\x1b[38;2;1;2;3m◇ Edit  target\x1b[39m",
+		"\x1b[38;2;1;2;3m中文 📌 内容\x1b[39m",
+		"tail",
+	];
+	const cleanup = installMessageBorders(() => frameTheme as never, { toolBackground: true });
+	const originalNow = Date.now;
+
+	try {
+		for (const width of [40, 41, 80, 119, 160]) {
+			const renderAt = (now: number) => {
+				Date.now = () => now;
+				return withEnv("PI_READMAP_RENDER_MODE", "color", () =>
+					prototype.render.call({ isPartial: true, result: undefined, toolName: "edit" }, width));
+			};
+			const first = renderAt(0);
+			const second = renderAt(80);
+			const completed = withEnv("PI_READMAP_RENDER_MODE", "color", () =>
+				prototype.render.call({ isPartial: false, result: { isError: false }, toolName: "edit" }, width));
+			const firstPlain = first.map(stripAnsi);
+			assert.ok(first.slice(1).every((line) => visibleWidth(line) === width));
+			assert.equal(firstPlain[1]?.at(-1), "╮");
+			assert.match(first[1] ?? "", /╮\x1b\[39m$/);
+			assert.ok((first[1]?.match(/\x1b\[38;2;/g) ?? []).length < 8,
+				"running title border must not color the long rule cell by cell");
+			assert.ok(firstPlain.slice(2, -1).every((line) => line.endsWith("│")));
+			assert.equal(firstPlain.at(-1)?.at(-1), "╯");
+			assert.match(first.at(-1) ?? "", /╯\x1b\[39m$/);
+			assert.equal((first.at(-1)?.match(/\x1b\[38;2;/g) ?? []).length, 1,
+				"running bottom border must use one static color run");
+			assert.ok((completed.at(-1)?.match(/\x1b\[38;2;/g) ?? []).length > 1,
+				"completed bottom border should retain the Sakura gradient");
+			assert.notEqual(first[1], second[1], "running marker should keep animating");
+			assert.equal(first.at(-1), second.at(-1), "static bottom corner must not repaint differently");
+		}
+	} finally {
+		Date.now = originalNow;
+		cleanup();
+		prototype.render = originalRender;
+	}
+});
+
 test("user messages use a titleless rail frame distinct from tool cards", () => {
 	type RenderPrototype = { render(this: unknown, width: number): string[] };
 	const userPrototype = UserMessageComponent.prototype as unknown as RenderPrototype;
