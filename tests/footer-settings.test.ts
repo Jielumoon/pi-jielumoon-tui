@@ -17,12 +17,16 @@ import { DEFAULT_FOOTER_SETTINGS, FOOTER_SETTING_DEFINITIONS } from "../src/foot
 /** getAgentDir 支持 PI_CODING_AGENT_DIR 覆盖；测试全部落在临时目录里。 */
 const AGENT_DIR_ENV = "PI_CODING_AGENT_DIR";
 
-function withAgentDir<T>(run: (dir: string) => T): T {
+/**
+ * 必须 await 回调：此前同步版本在 async 回调刚返回 Promise 时就还原了环境变量，
+ * 异步测试体实际写进真实 agent 目录（本地误通过并污染配置，CI 无目录则失败）。
+ */
+async function withAgentDir<T>(run: (dir: string) => T | Promise<T>): Promise<T> {
 	const dir = mkdtempSync(join(tmpdir(), "pi-footer-settings-"));
 	const previous = process.env[AGENT_DIR_ENV];
 	process.env[AGENT_DIR_ENV] = dir;
 	try {
-		return run(dir);
+		return await run(dir);
 	} finally {
 		if (previous === undefined) delete process.env[AGENT_DIR_ENV];
 		else process.env[AGENT_DIR_ENV] = previous;
@@ -30,8 +34,8 @@ function withAgentDir<T>(run: (dir: string) => T): T {
 	}
 }
 
-test("read falls back to defaults for missing or malformed files", () => {
-	withAgentDir((dir) => {
+test("read falls back to defaults for missing or malformed files", async () => {
+	await withAgentDir((dir) => {
 		assert.deepEqual(readFooterSettings(), DEFAULT_FOOTER_SETTINGS, "missing file should yield defaults");
 
 		writeFileSync(join(dir, FOOTER_SETTINGS_FILE), "{not json", "utf8");
@@ -42,8 +46,8 @@ test("read falls back to defaults for missing or malformed files", () => {
 	});
 });
 
-test("read applies only known boolean fields", () => {
-	withAgentDir((dir) => {
+test("read applies only known boolean fields", async () => {
+	await withAgentDir((dir) => {
 		writeFileSync(
 			join(dir, FOOTER_SETTINGS_FILE),
 			JSON.stringify({
@@ -62,8 +66,8 @@ test("read applies only known boolean fields", () => {
 	});
 });
 
-test("save and read round-trip the full settings object", () => {
-	withAgentDir(() => {
+test("save and read round-trip the full settings object", async () => {
+	await withAgentDir(() => {
 		const settings = { ...DEFAULT_FOOTER_SETTINGS, blackhole: false, toolBackground: true };
 		assert.equal(saveFooterSettings(settings), true, "save should succeed in a writable agent dir");
 		assert.deepEqual(readFooterSettings(), settings, "read should return exactly what was saved");

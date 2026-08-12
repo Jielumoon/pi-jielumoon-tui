@@ -14,8 +14,9 @@ jobs:
         # Node 24 曾暴露 assert 消息生成的宿主差异；矩阵防止单版本验证的盲区。
         node-version: [22, 24]
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      # v5 起 runner 侧用 Node 24 执行 action 本体，消除 Node 20 弃用告警。
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: ${{ matrix.node-version }}
           cache: npm
