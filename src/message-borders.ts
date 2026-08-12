@@ -10,11 +10,14 @@ import {
 import { Markdown, type MarkdownTheme, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { stripAnsi, trimTerminalPadding } from "./ansi";
 import {
+	mix,
 	renderBoxedLine,
 	renderSakuraFrameBorder,
 	renderSakuraSpinner,
 	renderSakuraSolid,
+	rgbBackground,
 	rgbForeground,
+	type RGB,
 } from "./gradient";
 import { isObjectLike as isObject } from "./guards";
 import { installPrototypePatch } from "./prototype-patch-registry";
@@ -25,7 +28,6 @@ type RenderedLines = string[];
 type MessageBorderSettings = {
 	toolBackground: boolean;
 };
-type ToolBackground = "toolPendingBg" | "toolSuccessBg" | "toolErrorBg";
 
 type ToolRuntime = {
 	isPartial?: boolean;
@@ -96,6 +98,14 @@ const RAIL_WORKING = [159, 211, 242] as const;
 const RAIL_SUCCESS = [174, 229, 197] as const;
 const RAIL_ERROR = [255, 143, 163] as const;
 const RAIL_CANCELLED = [243, 217, 139] as const;
+// 工具卡状态底色：把对应 rail 的马卡龙色相按同一比例压进墨底，卡内底色与左侧 rail 呼应，
+// 不随宿主主题变化（宿主主题的 tool*Bg 质量参差，catppuccin-mocha 是近黑/灰且成败同色）。
+const TOOL_BG_INK: RGB = [27, 26, 40]; // sakura-macaron ink #1b1a28
+const TOOL_BG_TINT = 0.24;
+const TOOL_BG_RUNNING = mix(TOOL_BG_INK, RAIL_WORKING, TOOL_BG_TINT); // 雾蓝
+const TOOL_BG_SUCCESS = mix(TOOL_BG_INK, RAIL_SUCCESS, TOOL_BG_TINT); // 雾绿
+const TOOL_BG_ERROR = mix(TOOL_BG_INK, RAIL_ERROR, TOOL_BG_TINT); // 雾玫瑰
+const TOOL_BG_CANCELLED = mix(TOOL_BG_INK, RAIL_CANCELLED, TOOL_BG_TINT); // 雾奶油
 function isRenderedLines(value: unknown): value is RenderedLines {
 	return Array.isArray(value) && value.every((line) => typeof line === "string");
 }
@@ -169,17 +179,11 @@ function themeFg(theme: Theme | undefined, color: ThemeColor, text: string): str
 	}
 }
 
-function toolBackgroundForState(state: "running" | "success" | "error" | "cancelled"): ToolBackground {
-	return state === "running" ? "toolPendingBg" : state === "success" ? "toolSuccessBg" : "toolErrorBg";
-}
-
-function themeBg(theme: Theme | undefined, color: ToolBackground, text: string): string {
-	if (!theme) return text;
-	try {
-		return theme.bg(color, text);
-	} catch {
-		return text;
-	}
+function toolBackgroundForState(state: "running" | "success" | "error" | "cancelled"): RGB {
+	if (state === "running") return TOOL_BG_RUNNING;
+	if (state === "success") return TOOL_BG_SUCCESS;
+	if (state === "cancelled") return TOOL_BG_CANCELLED;
+	return TOOL_BG_ERROR;
 }
 
 function makeUserMarkdownTheme(theme: Theme | undefined): MarkdownTheme {
@@ -329,7 +333,6 @@ function frameBody(
 	body: string[],
 	width: number,
 	state: "running" | "success" | "error" | "cancelled",
-	theme: Theme | undefined,
 	showToolBackground: boolean,
 ): RenderedLines {
 	const targetWidth = frameWidth(width);
@@ -344,7 +347,7 @@ function frameBody(
 	const renderContentLine = (line: string): string => {
 		if (!showToolBackground) return renderBoxedLine(line, targetWidth, leftRail, rightRail);
 		const inner = renderBoxedLine(line, innerWidth, "", "");
-		return `${leftRail}${themeBg(theme, background, inner)}${rightRail}`;
+		return `${leftRail}${rgbBackground(background, inner)}${rightRail}`;
 	};
 	const spacedContent = showToolBackground
 		? content.length > 0 ? ["", ...content, ""] : [""]
@@ -375,7 +378,6 @@ function decorateToolMessage(
 	lines: RenderedLines,
 	width: number,
 	runtime: ToolRuntime,
-	theme: Theme | undefined,
 	showToolBackground: boolean,
 ): RenderedLines {
 	const isRead = runtime.toolName === "read";
@@ -403,14 +405,13 @@ function decorateToolMessage(
 			return truncateToWidth(`  ${line}`, width, "");
 		});
 	}
-	return frameBody(prefix, body, width, state, theme, showToolBackground);
+	return frameBody(prefix, body, width, state, showToolBackground);
 }
 
 function decorateBashMessage(
 	lines: RenderedLines,
 	width: number,
 	runtime: BashRuntime,
-	theme: Theme | undefined,
 	showToolBackground: boolean,
 ): RenderedLines {
 	if (resolveRenderMode() !== "color" || width <= 2 || lines.length === 0 || containsTerminalImage(lines)) return lines;
@@ -442,7 +443,7 @@ function decorateBashMessage(
 		if (state === "cancelled" && plain === "(cancelled)") return false;
 		return true;
 	});
-	return frameBody(prefix, settledBody, width, state, theme, showToolBackground);
+	return frameBody(prefix, settledBody, width, state, showToolBackground);
 }
 
 export function installMessageBorders(
@@ -506,7 +507,7 @@ export function installMessageBorders(
 			const renderArgs = contentWidth === width ? args : [contentWidth, ...args.slice(1)];
 			const rendered = Reflect.apply(predecessor, receiver, renderArgs);
 			if (!isRenderedLines(rendered) || typeof width !== "number") return rendered;
-			const framed = decorateToolMessage(rendered, width, runtime, theme, settings.toolBackground);
+			const framed = decorateToolMessage(rendered, width, runtime, settings.toolBackground);
 			if (
 				decorative &&
 				isObject(receiver) &&
@@ -590,7 +591,7 @@ export function installMessageBorders(
 			const renderArgs = contentWidth === width ? args : [contentWidth, ...args.slice(1)];
 			const rendered = Reflect.apply(predecessor, receiver, renderArgs);
 			if (!isRenderedLines(rendered) || typeof width !== "number") return rendered;
-			const repainted = decorateBashMessage(rendered, width, runtime, theme, settings.toolBackground);
+			const repainted = decorateBashMessage(rendered, width, runtime, settings.toolBackground);
 			if (decorative && isObject(receiver) && settled) {
 				bashRenderCache.set(receiver, {
 					width,

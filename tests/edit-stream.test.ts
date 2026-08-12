@@ -157,15 +157,18 @@ test("edit call animates incrementally and flushes when args complete", () => {
 	}) as CallComponent;
 	assert.ok(component instanceof EditCallComponent, "edit call should route to EditCallComponent");
 
-	const initial = stripAnsi(component.render(80).join("\n"));
+	const initialLines = component.render(80);
+	const initial = stripAnsi(initialLines.join("\n"));
 	assert.match(initial, /Edit.*live\.ts.*1 edit/);
-	assert.match(initial, /▏/, "animating edit must show the cursor");
+	assert.equal(initialLines.length, 1, "nothing revealed yet: header only, no cursor row");
 	assert.doesNotMatch(initial, /replace/, "label text must not be revealed before animation advances");
 
 	assert.equal(component.advanceAnimation(), true, "backlog should keep the animation alive");
 	assert.equal(invalidations, 1, "advance must invalidate the row");
 	// 目标 15 字符、追赶 6 tick：一次推进揭示 ceil(15/6)=3 个字符。
-	assert.match(stripAnsi(component.render(80).join("\n")), /┄ rep▏/, "label prefix should reveal progressively");
+	const advanced = stripAnsi(component.render(80).join("\n"));
+	assert.match(advanced, /┄ rep$/, "label prefix should reveal progressively");
+	assert.doesNotMatch(advanced, /▏/, "reveal must not draw a cursor");
 
 	const complete = tool.renderCall?.(args, theme, {
 		argsComplete: true,
@@ -176,7 +179,7 @@ test("edit call animates incrementally and flushes when args complete", () => {
 	assert.match(completeText, /replace/);
 	assert.match(completeText, /- old/);
 	assert.match(completeText, /\+ new/);
-	assert.doesNotMatch(completeText, /▏/, "flushed edit must drop the cursor");
+	assert.doesNotMatch(completeText, /▏/, "flushed edit must not draw a cursor");
 	component.stop();
 });
 
@@ -328,12 +331,12 @@ test("edit call with animation disabled stays static and completed calls clear",
 	assert.deepEqual(done.render(80), [], "finished call clears the pending preview");
 });
 
-test("empty edit stream shows a bare cursor while waiting for ops", () => {
-	const preview = renderEditPreviewLines("", [], colorPresentation, 80, false, true);
-	assert.deepEqual(preview.lines.map(stripAnsi), ["▏"]);
+test("empty edit stream renders no body while waiting for ops", () => {
+	const preview = renderEditPreviewLines("", [], colorPresentation, 80, false);
+	assert.deepEqual(preview.lines, []);
 	assert.equal(preview.truncated, false);
-	const still = renderEditPreviewLines("", [], colorPresentation, 80, false, false);
-	assert.deepEqual(still.lines, []);
+	const expanded = renderEditPreviewLines("", [], colorPresentation, 80, true);
+	assert.deepEqual(expanded.lines, []);
 });
 
 test("edit stream bounds a huge single line in the collapsed tail", () => {

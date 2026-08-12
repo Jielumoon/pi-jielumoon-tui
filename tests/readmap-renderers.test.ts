@@ -707,7 +707,13 @@ test("read stays borderless while framed tools embed titles without native backg
 		prototype.render = originalRender;
 	}
 });
-test("tool status background is optional, semantic, and cache-aware", () => {
+// 工具卡状态底色固定为马卡龙 rail 色相压进墨底（mix(ink, rail, 0.24)），不再取宿主主题的 tool*Bg。
+const TOOL_BG_RUNNING_ANSI = "\x1b[48;2;59;70;88m";
+const TOOL_BG_SUCCESS_ANSI = "\x1b[48;2;62;75;78m";
+const TOOL_BG_ERROR_ANSI = "\x1b[48;2;82;54;70m";
+const TOOL_BG_CANCELLED_ANSI = "\x1b[48;2;79;72;64m";
+
+test("tool status background is optional, Sakura-fixed, and semantic", () => {
 	type ToolPrototype = { render(this: unknown, width: number): string[] };
 	const prototype = ToolExecutionComponent.prototype as unknown as ToolPrototype;
 	const originalRender = prototype.render;
@@ -746,13 +752,13 @@ test("tool status background is optional, semantic, and cache-aware", () => {
 		const withBackground = withEnv("PI_READMAP_RENDER_MODE", "color", () =>
 			prototype.render.call(runtime, 80));
 		assert.ok(
-			withBackground.slice(1, -1).every((line) => /\x1b\[48;5;240m/.test(line)),
-			"every inner line should carry the theme background",
+			withBackground.slice(1, -1).every((line) => line.includes(TOOL_BG_SUCCESS_ANSI)),
+			"every inner line should carry the fixed success background",
 		);
 		assert.equal(withBackground.length, 5);
 		assert.ok(withBackground.every((line) => visibleWidth(line) === 80), "background frame must stay exactly within the requested width");
 		for (const line of withBackground.slice(1, -1)) {
-			const backgroundStart = line.indexOf("\x1b[48;5;240m");
+			const backgroundStart = line.indexOf(TOOL_BG_SUCCESS_ANSI);
 			const backgroundEnd = line.indexOf("\x1b[49m", backgroundStart);
 			assert.ok(backgroundStart >= 0 && backgroundEnd >= 0, "background must open and close on the line");
 			assert.equal(visibleWidth(line.slice(0, backgroundStart)), 1, "background must start after the left rail");
@@ -761,13 +767,13 @@ test("tool status background is optional, semantic, and cache-aware", () => {
 		assert.match(stripAnsi(withBackground.at(-2) ?? ""), /^┃\s+│$/, "framed tools keep a padded row above the bottom border");
 		assert.doesNotMatch(withBackground[0] ?? "", /\x1b\[48[;:]/);
 		assert.doesNotMatch(withBackground.at(-1) ?? "", /\x1b\[48[;:]/);
-		assert.ok(backgroundCalls.includes("toolSuccessBg"), "success state should request toolSuccessBg");
+		assert.deepEqual(backgroundCalls, [], "fixed palette must not consult theme.bg");
 
 		currentTheme = alternateTheme;
 		const withAlternateTheme = withEnv("PI_READMAP_RENDER_MODE", "color", () =>
 			prototype.render.call(runtime, 80));
-		assert.match(withAlternateTheme.join("\n"), /\x1b\[48;5;241m/);
-		assert.doesNotMatch(withAlternateTheme.join("\n"), /\x1b\[48;5;240m/);
+		assert.ok(withAlternateTheme.join("\n").includes(TOOL_BG_SUCCESS_ANSI), "fixed palette must persist across theme switches");
+		assert.doesNotMatch(withAlternateTheme.join("\n"), /\x1b\[48;5;/);
 		currentTheme = backgroundTheme;
 
 		settings.toolBackground = false;
@@ -775,35 +781,29 @@ test("tool status background is optional, semantic, and cache-aware", () => {
 			prototype.render.call(runtime, 80));
 		assert.doesNotMatch(afterToggleOff.join("\n"), /\x1b\[48[;:]/);
 
-		backgroundCalls.length = 0;
 		const plain = withEnv("PI_READMAP_RENDER_MODE", "plain", () =>
 			prototype.render.call(runtime, 80));
 		assert.deepEqual(plain, ["✓ Edit  target", "body"]);
-		assert.deepEqual(backgroundCalls, []);
 
-		backgroundCalls.length = 0;
 		settings.toolBackground = true;
 		renderBody = () => ["✓ Read  target", "body"];
 		const read = withEnv("PI_READMAP_RENDER_MODE", "color", () =>
 			prototype.render.call({ ...runtime, toolName: "read" }, 80));
 		assert.doesNotMatch(read.join("\n"), /\x1b\[48[;:]/);
-		assert.deepEqual(backgroundCalls, []);
 
-		backgroundCalls.length = 0;
 		renderBody = () => ["◇ Edit  target", "body"];
 		const running = withEnv("PI_READMAP_RENDER_MODE", "color", () =>
 			prototype.render.call({ ...runtime, isPartial: true, result: undefined }, 80));
-		assert.match(running.join("\n"), /\x1b\[48;5;240m/);
-		assert.ok(backgroundCalls.some((call) => call === "toolPendingBg"), "running state should request toolPendingBg");
+		assert.ok(running.join("\n").includes(TOOL_BG_RUNNING_ANSI), "running state should paint the ink-violet background");
+		assert.ok(!running.join("\n").includes(TOOL_BG_SUCCESS_ANSI), "running must stay distinct from success");
 
-		backgroundCalls.length = 0;
 		const failed = withEnv("PI_READMAP_RENDER_MODE", "color", () =>
 			prototype.render.call({
 				...runtime,
 				result: { isError: true, content: [{ type: "text" }] },
 			}, 80));
-		assert.match(failed.join("\n"), /\x1b\[48;5;240m/);
-		assert.ok(backgroundCalls.some((call) => call === "toolErrorBg"), "failed state should request toolErrorBg");
+		assert.ok(failed.join("\n").includes(TOOL_BG_ERROR_ANSI), "failed state should paint the ink-rose background");
+		assert.deepEqual(backgroundCalls, [], "no state may consult theme.bg");
 	} finally {
 		cleanup();
 		prototype.render = originalRender;
@@ -826,7 +826,10 @@ test("tool status background covers Bash success and cancellation at supported w
 	const cleanup = installMessageBorders(() => backgroundTheme as never, settings);
 
 	try {
-		for (const [status, expectedBackground] of [["complete", "toolSuccessBg"], ["cancelled", "toolErrorBg"]] as const) {
+		for (const [status, expectedBackground] of [
+			["complete", TOOL_BG_SUCCESS_ANSI],
+			["cancelled", TOOL_BG_CANCELLED_ANSI],
+		] as const) {
 			for (const width of [40, 80, 160]) {
 				backgroundCalls.length = 0;
 				const lines = withEnv("PI_READMAP_RENDER_MODE", "color", () =>
@@ -836,9 +839,9 @@ test("tool status background covers Bash success and cancellation at supported w
 						outputLines: ["output"],
 						expanded: false,
 					}, width));
-				const backgroundLines = lines.filter((line) => line.includes("\x1b[48;5;242m"));
-				assert.ok(backgroundLines.length > 0, "bash body should carry the state background");
-				assert.ok(backgroundCalls.includes(expectedBackground), `bash ${status} should request ${expectedBackground}`);
+				const backgroundLines = lines.filter((line) => line.includes(expectedBackground));
+				assert.ok(backgroundLines.length > 0, `bash ${status} should carry the fixed state background`);
+				assert.deepEqual(backgroundCalls, [], "bash background must not consult theme.bg");
 				assert.doesNotMatch(lines[1] ?? "", /\x1b\[48[;:]/, "标题上框不能带状态底色");
 				assert.doesNotMatch(lines.at(-1) ?? "", /\x1b\[48[;:]/, "底框不能带状态底色");
 				assert.ok(lines.every((line) => visibleWidth(line) <= width), `bash frame must fit width ${width}`);
@@ -1109,14 +1112,15 @@ test("write call animates incrementally and flushes when args complete", () => {
 		advanceAnimation: () => boolean;
 		stop: () => void;
 	};
-	const initial = stripAnsi(component.render(80).join("\n"));
+	const initialLines = component.render(80);
+	const initial = stripAnsi(initialLines.join("\n"));
 	assert.match(initial, /Write.*live\.ts.*0 lines/);
-	assert.match(initial, /▏/);
-	assert.doesNotMatch(initial, /abc/);
+	assert.equal(initialLines.length, 1, "nothing revealed yet: header only, no placeholder row");
+	assert.doesNotMatch(initial, /abc|empty file/);
 
 	assert.equal(component.advanceAnimation(), true);
 	assert.equal(invalidations, 1);
-	assert.match(stripAnsi(component.render(80).join("\n")), /a▏/);
+	assert.match(stripAnsi(component.render(80).join("\n")), /1 │ a$/, "first character reveals without a cursor");
 
 	const complete = tool.renderCall?.(
 		{ path: "src/live.ts", content: "abc" },
@@ -1147,8 +1151,8 @@ test("parallel write calls keep independent animation state", () => {
 	assert.notEqual(left, right);
 	left.advanceAnimation();
 	right.advanceAnimation();
-	assert.match(stripAnsi(left.render(80).join("\n")), /l▏/);
-	assert.match(stripAnsi(right.render(80).join("\n")), /r▏/);
+	assert.match(stripAnsi(left.render(80).join("\n")), /1 │ l$/);
+	assert.match(stripAnsi(right.render(80).join("\n")), /1 │ r$/);
 	assert.doesNotMatch(stripAnsi(left.render(80).join("\n")), /right/);
 	assert.doesNotMatch(stripAnsi(right.render(80).join("\n")), /left/);
 	left.stop();
@@ -1177,8 +1181,8 @@ test("shared write timer isolates a failing component", (t) => {
 	try {
 		assert.doesNotThrow(() => t.mock.timers.tick(40), "shared tick must survive a throwing invalidate");
 		assert.equal(rightInvalidations, 1, "healthy component should keep animating after a peer fails");
-		assert.doesNotMatch(stripAnsi(left.render(80).join("\n")), /▏/, "failed component must drop its cursor");
-		assert.match(stripAnsi(right.render(80).join("\n")), /r▏/, "healthy component keeps revealing content");
+		assert.match(stripAnsi(left.render(80).join("\n")), /1 │ l$/, "failed component freezes at its last reveal");
+		assert.match(stripAnsi(right.render(80).join("\n")), /1 │ r$/, "healthy component keeps revealing content");
 	} finally {
 		left.stop();
 		right.stop();

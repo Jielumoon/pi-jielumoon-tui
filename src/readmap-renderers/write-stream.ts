@@ -94,7 +94,6 @@ function writeLineLayout(
 	lineNumberWidth: number,
 	width: number,
 	presentation: RenderPresentation,
-	cursor: boolean,
 	maxTailRows?: number,
 ): WriteLineLayout {
 	const screenReaderPrefix = `line ${lineNumber}: `;
@@ -107,17 +106,15 @@ function writeLineLayout(
 	const contentWidth = Math.max(1, width - visibleWidth(prefix));
 	let visibleRaw = rawLine;
 	if (highlightedLine === undefined && maxTailRows !== undefined) {
-		const cursorWidth = cursor ? 1 : 0;
-		const totalWidth = visibleWidth(rawLine) + cursorWidth;
+		const totalWidth = visibleWidth(rawLine);
 		const rowBudget = contentWidth * maxTailRows;
 		if (totalWidth > rowBudget) {
 			const finalRowWidth = totalWidth % contentWidth || contentWidth;
-			const rawBudget = Math.max(0, finalRowWidth + contentWidth * (maxTailRows - 1) - cursorWidth);
+			const rawBudget = Math.max(0, finalRowWidth + contentWidth * (maxTailRows - 1));
 			visibleRaw = trailingTextByWidth(rawLine, rawBudget);
 		}
 	}
-	const styledLine = highlightedLine ?? styleText(presentation, "toolOutput", visibleRaw);
-	const body = cursor ? `${styledLine}${styleText(presentation, "accent", "▏")}` : styledLine;
+	const body = highlightedLine ?? styleText(presentation, "toolOutput", visibleRaw);
 	const wrapped = wrapTextWithAnsi(body, contentWidth);
 	return {
 		prefix,
@@ -138,12 +135,14 @@ export function renderWritePreviewLines(
 	presentation: RenderPresentation,
 	width: number,
 	expanded: boolean,
-	cursor: boolean,
+	pending: boolean,
 	cache?: WriteHighlightCache,
 ): { lines: string[]; cache: WriteHighlightCache } {
 	const normalizedWidth = normalizeWidth(width);
 	const nextCache = updateWriteHighlightCache(cache, content, path, presentation);
-	if (content.length === 0 && !cursor) {
+	if (content.length === 0) {
+		// 流式尚未揭示任何内容时不放占位文案，避免"empty file"闪现。
+		if (pending) return { lines: [], cache: nextCache };
 		const empty = presentation.mode === "screen-reader"
 			? "empty file"
 			: styleText(presentation, "dim", "empty file");
@@ -159,7 +158,6 @@ export function renderWritePreviewLines(
 		lineNumberWidth,
 		normalizedWidth,
 		presentation,
-		cursor && index === lastIndex,
 		maxTailRows,
 	);
 	if (expanded) {
@@ -184,7 +182,6 @@ export class WriteCallComponent implements Component {
 	private cwd: string | undefined;
 	private expanded = false;
 	private animationEnabled = false;
-	private showCursor = false;
 	private invalidateRow: (() => void) | undefined;
 	private presentation: RenderPresentation = { mode: "color", diagnostics: false, theme: undefined };
 	private highlightCache: WriteHighlightCache | undefined;
@@ -217,7 +214,6 @@ export class WriteCallComponent implements Component {
 			presentation.mode === "color" &&
 			context.argsComplete !== true &&
 			context.isPartial !== false;
-		this.showCursor = this.animationEnabled;
 
 		if (!this.animationEnabled) {
 			this.revealedContent = this.targetContent;
@@ -243,7 +239,6 @@ export class WriteCallComponent implements Component {
 
 	stop(): void {
 		this.animationEnabled = false;
-		this.showCursor = false;
 		unscheduleStreamAnimation(this);
 	}
 
@@ -261,7 +256,7 @@ export class WriteCallComponent implements Component {
 			this.presentation,
 			normalizedWidth,
 			this.expanded,
-			this.showCursor,
+			this.animationEnabled,
 			this.highlightCache,
 		);
 		this.highlightCache = preview.cache;

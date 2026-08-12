@@ -106,12 +106,12 @@ pi -e /home/jielumoon/opt/projects/pi-tui/pi-jielumoon
 
 其中 `context` 开关直接控制 Editor 下方的 Nano context 紧凑用量条，不再是无效的 Footer 遗留选项。
 
-`tool-bg` 只在 color 模式下生效：运行中、成功、失败分别使用 Pi 主题的 `toolPendingBg`、`toolSuccessBg`、`toolErrorBg`，不改变 Sakura 边框。
+`tool-bg` 只在 color 模式下生效：底色由对应状态 rail 的马卡龙色相按同一比例压进墨底派生——运行雾蓝、成功雾绿、失败雾玫瑰、取消雾奶油，卡内底色与左侧 rail 呼应，不随宿主主题变化（宿主主题的 `tool*Bg` 质量参差，例如 catppuccin-mocha 是近黑/灰且成功失败同色）。
 也可直接在该 JSON 中设置 `"toolBackground": true`。
 
-`write-animation` 默认开启，仅控制逐字过渡和运行光标；关闭后 Write 仍实时展示末尾 8 个终端显示行。8 KiB 以内的可识别文件自动语法高亮，超过上限时回退纯文本尾部，避免高亮器冻结 TUI。也可在同一 JSON 中设置 `"writeAnimation": false`。plain、screen-reader 与 `NO_COLOR` 模式始终使用静态预览。
+`write-animation` 默认开启，仅控制逐字过渡（无光标）；关闭后 Write 仍实时展示末尾 8 个终端显示行。8 KiB 以内的可识别文件自动语法高亮，超过上限时回退纯文本尾部，避免高亮器冻结 TUI。也可在同一 JSON 中设置 `"writeAnimation": false`。plain、screen-reader 与 `NO_COLOR` 模式始终使用静态预览。
 
-`edit-animation` 默认开启：Edit 参数流式期间按操作展示伪 diff——`┄` 操作标签（含 `LINE:HASH` 锚点）、红 `▌-` 旧文本、绿 `▌+` 新文本，逐字揭示并跟随光标，折叠态保留尾部 8 行；工具完成后由真实 diff 替换。流式期间没有真实行号，红绿行只反映参数内容。也可在同一 JSON 中设置 `"editAnimation": false` 保留静态伪 diff 预览。
+`edit-animation` 默认开启：Edit 参数流式期间按操作展示伪 diff——`┄` 操作标签（含 `LINE:HASH` 锚点）、红 `▌-` 旧文本、绿 `▌+` 新文本，逐字揭示（无光标），折叠态保留尾部 8 行；工具完成后由真实 diff 替换。流式期间没有真实行号，红绿行只反映参数内容。也可在同一 JSON 中设置 `"editAnimation": false` 保留静态伪 diff 预览。
 
 设置会保存到 Pi agent 目录的 `pi-vibrant-footer.json`，用于兼容原版 Footer 配置。默认路径通常是：
 

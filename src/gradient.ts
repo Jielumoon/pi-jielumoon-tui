@@ -55,6 +55,11 @@ export function rgbForeground(color: RGB, text: string, bold = false): string {
 	return `${open}\x1b[38;2;${color[0]};${color[1]};${color[2]}m${text}${close}`;
 }
 
+export function rgbBackground(color: RGB, text: string): string {
+	// 只重置背景（\x1b[49m），与宿主 theme.bg 的包裹语义一致，正文前景色不受影响。
+	return `\x1b[48;2;${color[0]};${color[1]};${color[2]}m${text}\x1b[49m`;
+}
+
 function foreground(color: RGB, text: string): string {
 	return `\x1b[38;2;${color[0]};${color[1]};${color[2]}m${text}`;
 }

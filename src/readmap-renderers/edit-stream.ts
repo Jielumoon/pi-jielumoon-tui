@@ -7,7 +7,6 @@ import { visibleWidth, type Component } from "@earendil-works/pi-tui";
 import { asRecord } from "../guards.ts";
 import { renderToolHeader } from "./header.ts";
 import {
-	clampLine,
 	clampLines,
 	displayText,
 	normalizeWidth,
@@ -171,25 +170,21 @@ function editStreamRows(
 	kind: EditStreamKind,
 	presentation: RenderPresentation,
 	width: number,
-	cursor: boolean,
 	maxTailRows?: number,
 ): string[] {
 	const prefix = editLinePrefix(kind, presentation);
 	const contentWidth = Math.max(1, width - visibleWidth(prefix));
 	let visibleText = lineText;
 	if (maxTailRows !== undefined) {
-		const cursorWidth = cursor ? 1 : 0;
-		const totalWidth = visibleWidth(lineText) + cursorWidth;
+		const totalWidth = visibleWidth(lineText);
 		const rowBudget = contentWidth * maxTailRows;
 		if (totalWidth > rowBudget) {
 			const finalRowWidth = totalWidth % contentWidth || contentWidth;
-			const rawBudget = Math.max(0, finalRowWidth + contentWidth * (maxTailRows - 1) - cursorWidth);
+			const rawBudget = Math.max(0, finalRowWidth + contentWidth * (maxTailRows - 1));
 			visibleText = trailingTextByWidth(lineText, rawBudget);
 		}
 	}
-	const body =
-		styleText(presentation, editLineColor(kind), visibleText) +
-		(cursor ? styleText(presentation, "accent", "▏") : "");
+	const body = styleText(presentation, editLineColor(kind), visibleText);
 	return wrapWithHangingIndent(prefix, body, width);
 }
 
@@ -199,35 +194,33 @@ export function renderEditPreviewLines(
 	presentation: RenderPresentation,
 	width: number,
 	expanded: boolean,
-	cursor: boolean,
 ): { lines: string[]; truncated: boolean } {
 	const w = normalizeWidth(width);
-	if (targetLines.length === 0) {
-		return {
-			lines: cursor ? [clampLine(styleText(presentation, "accent", "▏"), w)] : [],
-			truncated: false,
-		};
-	}
+	if (targetLines.length === 0) return { lines: [], truncated: false };
 
 	// revealed 是 targetText 的字符前缀，因此第 i 行必与 targetLines[i] 对齐（末行可为部分前缀）。
 	const revealedLines = revealed.split("\n");
-	const lastIndex = revealedLines.length - 1;
+	// 末行还没揭示出任何字符而目标行非空时暂不渲染，避免出现裸标记行。
+	const lastRevealed = revealedLines[revealedLines.length - 1] ?? "";
+	const renderable = lastRevealed === "" && (targetLines[revealedLines.length - 1]?.text ?? "") !== ""
+		? revealedLines.slice(0, -1)
+		: revealedLines;
+	if (renderable.length === 0) return { lines: [], truncated: false };
 	const rowsAt = (index: number, maxTailRows?: number): string[] => editStreamRows(
-		revealedLines[index] ?? "",
+		renderable[index] ?? "",
 		targetLines[index]?.kind ?? "add",
 		presentation,
 		w,
-		cursor && index === lastIndex,
 		maxTailRows,
 	);
 	if (expanded) {
-		const rows = revealedLines.flatMap((_line, index) => rowsAt(index));
+		const rows = renderable.flatMap((_line, index) => rowsAt(index));
 		return { lines: clampLines(rows, w), truncated: false };
 	}
 
 	const rows: string[] = [];
 	let truncated = false;
-	for (let index = lastIndex; index >= 0; index--) {
+	for (let index = renderable.length - 1; index >= 0; index--) {
 		if (rows.length >= EDIT_COLLAPSED_DISPLAY_LINES) {
 			truncated = true;
 			break;
@@ -249,7 +242,6 @@ export class EditCallComponent implements Component {
 	private cwd: string | undefined;
 	private expanded = false;
 	private animationEnabled = false;
-	private showCursor = false;
 	private invalidateRow: (() => void) | undefined;
 	private presentation: RenderPresentation = { mode: "color", diagnostics: false, theme: undefined };
 	private cachedWidth: number | undefined;
@@ -279,7 +271,6 @@ export class EditCallComponent implements Component {
 			presentation.mode === "color" &&
 			context.argsComplete !== true &&
 			context.isPartial !== false;
-		this.showCursor = this.animationEnabled;
 
 		if (!this.animationEnabled) {
 			this.revealed = this.targetText;
@@ -305,7 +296,6 @@ export class EditCallComponent implements Component {
 
 	stop(): void {
 		this.animationEnabled = false;
-		this.showCursor = false;
 		unscheduleStreamAnimation(this);
 	}
 
@@ -323,7 +313,6 @@ export class EditCallComponent implements Component {
 			this.presentation,
 			normalizedWidth,
 			this.expanded,
-			this.showCursor,
 		);
 		const header = renderToolHeader(
 			"edit",
