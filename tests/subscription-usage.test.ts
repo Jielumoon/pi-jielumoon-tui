@@ -211,6 +211,39 @@ test("controller honors the success TTL and failure backoff", async () => {
 });
 
 
+test("controller coalesces concurrent refreshes into a single request", async () => {
+	let requests = 0;
+	let releaseResponse: ((value: Response) => void) | undefined;
+	const fetchImpl: UsageFetch = () => {
+		requests += 1;
+		return new Promise<Response>((resolve) => {
+			releaseResponse = resolve;
+		});
+	};
+	const ctx = {
+		model: { provider: "openrouter", id: "test", baseUrl: "https://openrouter.ai/api/v1" },
+		modelRegistry: {
+			getProviderAuth: async () => ({ auth: { apiKey: "router-key" } }),
+			getApiKeyAndHeaders: async () => ({ ok: true, apiKey: "router-key", headers: {} }),
+		},
+		ui: { setStatus: () => {} },
+	} as unknown as ExtensionContext;
+
+	const controller = new SubscriptionUsageController(fetchImpl, () => 1_900_000_000_000);
+	const first = controller.refresh(ctx, false);
+	const second = controller.refresh(ctx, false);
+	const forced = controller.refresh(ctx, true);
+	await new Promise((resolve) => setImmediate(resolve));
+	assert.equal(requests, 1, "concurrent refreshes must share one in-flight request");
+
+	releaseResponse?.(jsonResponse({ data: { limit: 10, limit_remaining: 8 } }));
+	const [a, b, c] = await Promise.all([first, second, forced]);
+	assert.equal(requests, 1, "no extra request may fire after the shared one resolves");
+	assert.equal(a?.windows[0]?.remaining, 8, "first caller should receive the shared snapshot");
+	assert.equal(b?.windows[0]?.remaining, 8, "second caller should receive the shared snapshot");
+	assert.equal(c?.windows[0]?.remaining, 8, "forced caller should reuse the in-flight request");
+});
+
 test("/usage reports unavailable usage instead of returning silently", async () => {
 	let usageHandler: ((args: string, ctx: ExtensionCommandContext) => Promise<void>) | undefined;
 	const pi = {

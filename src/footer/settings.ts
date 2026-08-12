@@ -69,11 +69,10 @@ function resetSettings(controller: FooterCommandController, ctx: ExtensionContex
 
 async function openSettings(controller: FooterCommandController, ctx: ExtensionContext): Promise<void> {
 	while (true) {
-		const options = [
-			...FOOTER_SETTING_DEFINITIONS.map((definition) => formatFooterSettingOption(controller.settings, definition)),
-			"恢复默认设置",
-			"完成",
-		];
+		const definitionOptions = FOOTER_SETTING_DEFINITIONS.map((definition) =>
+			formatFooterSettingOption(controller.settings, definition),
+		);
+		const options = [...definitionOptions, "恢复默认设置", "完成"];
 		const choice = await ctx.ui.select("Vibrant Footer 显示设置", options);
 		if (!choice || choice === "完成") return;
 		if (choice === "恢复默认设置") {
@@ -81,9 +80,8 @@ async function openSettings(controller: FooterCommandController, ctx: ExtensionC
 			continue;
 		}
 
-		const definition = FOOTER_SETTING_DEFINITIONS.find(
-			(item) => formatFooterSettingOption(controller.settings, item) === choice,
-		);
+		// 通过生成选项时的索引反查定义，避免依赖标签文案再次匹配。
+		const definition = FOOTER_SETTING_DEFINITIONS[definitionOptions.indexOf(choice)];
 		if (!definition) continue;
 
 		controller.settings[definition.key] = !controller.settings[definition.key];

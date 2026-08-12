@@ -8,6 +8,7 @@ import {
 	type ThemeColor,
 } from "@earendil-works/pi-coding-agent";
 import { Markdown, type MarkdownTheme, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { stripAnsi, trimTerminalPadding } from "./ansi";
 import {
 	renderBoxedLine,
 	renderSakuraFrameBorder,
@@ -15,6 +16,7 @@ import {
 	renderSakuraSolid,
 	rgbForeground,
 } from "./gradient";
+import { isObjectLike as isObject } from "./guards";
 import { installPrototypePatch } from "./prototype-patch-registry";
 import { resolveRenderMode } from "./render-mode";
 
@@ -96,29 +98,6 @@ const RAIL_ERROR = [255, 143, 163] as const;
 const RAIL_CANCELLED = [243, 217, 139] as const;
 function isRenderedLines(value: unknown): value is RenderedLines {
 	return Array.isArray(value) && value.every((line) => typeof line === "string");
-}
-
-function isObject(value: unknown): value is object {
-	return (typeof value === "object" && value !== null) || typeof value === "function";
-}
-
-function stripAnsi(line: string): string {
-	return line
-		.replace(/\x1b\][^\x07]*(?:\x07|\x1b\\)/g, "")
-		.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "");
-}
-
-
-const TRAILING_TERMINAL_PADDING = /[ \t]+((?:(?:\x1b\[[0-?]*[ -/]*[@-~])|(?:\x1b\][^\x07]*(?:\x07|\x1b\\)))*)$/;
-
-/** 移除 Text 为整行补齐的尾空格，同时保留其后的 ANSI reset。 */
-function trimTerminalPadding(line: string): string {
-	let trimmed = line;
-	while (true) {
-		const next = trimmed.replace(TRAILING_TERMINAL_PADDING, "$1");
-		if (next === trimmed) return trimmed;
-		trimmed = next;
-	}
 }
 
 /** 移除宿主工具卡背景，保留前景色、粗体及其它 SGR 样式。 */

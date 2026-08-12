@@ -72,8 +72,12 @@ function hasNerdFonts(): boolean {
 	return true;
 }
 
+let cachedIcons: IconSet | undefined;
+
 export function getIcons(): IconSet {
-	return hasNerdFonts() ? NERD_ICONS : UNICODE_ICONS;
+	// 环境变量在进程内不会变化；Footer 每帧调用，缓存判定结果。
+	cachedIcons ??= hasNerdFonts() ? NERD_ICONS : UNICODE_ICONS;
+	return cachedIcons;
 }
 
 export type UsageTotals = {

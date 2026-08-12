@@ -9,8 +9,14 @@ import installReadmapRenderers, {
 	clampLine,
 	patchReadmapTool,
 	patchToolPayload,
-} from "../src/readmap-renderers.ts";
+} from "../src/readmap-renderers/index.ts";
 import { installMessageBorders } from "../src/message-borders.ts";
+import { resolveRenderMode } from "../src/render-mode.ts";
+
+// 测试基线固定为 color 模式：宿主终端的 NO_COLOR/TERM 不得改变断言结果。
+// 显式 plain / screen-reader 用例仍通过 withEnv 覆盖 PI_READMAP_RENDER_MODE。
+process.env.PI_READMAP_RENDER_MODE = "color";
+delete process.env.NO_COLOR;
 
 const stripAnsi = (text: string): string =>
 	text
@@ -66,6 +72,26 @@ function withEnv<T>(name: string, value: string | undefined, run: () => T): T {
 		else process.env[name] = previous;
 	}
 }
+
+test("render mode falls back to plain when NO_COLOR is set", () => {
+	withEnv("PI_READMAP_RENDER_MODE", undefined, () => {
+		withEnv("NO_COLOR", "1", () => {
+			assert.equal(resolveRenderMode(), "plain", "NO_COLOR should force plain mode");
+		});
+		withEnv("NO_COLOR", undefined, () => {
+			assert.equal(resolveRenderMode(), "color", "default mode should be color");
+		});
+	});
+	withEnv("PI_READMAP_RENDER_MODE", "screen-reader", () => {
+		withEnv("NO_COLOR", "1", () => {
+			assert.equal(
+				resolveRenderMode(),
+				"screen-reader",
+				"explicit PI_READMAP_RENDER_MODE should win over NO_COLOR",
+			);
+		});
+	});
+});
 
 test("patchToolPayload ignores bad payload and skips non-target tools", () => {
 	assert.deepEqual(patchToolPayload(undefined), []);
@@ -238,8 +264,8 @@ test("P0 keeps diff and hashline gutters aligned with visible-width paths", () =
 		render: (w: number) => string[];
 	};
 	const callText = stripAnsi(call.render(70).join("\n"));
-	assert.ok(!callText.includes(path));
-	assert.ok(visibleWidth(callText.split("\n")[0] ?? "") <= 70);
+	assert.ok(!callText.includes(path), "long CJK path should be shortened in the call line");
+	assert.ok(visibleWidth(callText.split("\n")[0] ?? "") <= 70, "call line must fit the 70-column width");
 
 	const rangeColors: Array<{ color: string; text: string }> = [];
 	const rangeTheme = {
@@ -255,9 +281,18 @@ test("P0 keeps diff and hashline gutters aligned with visible-width paths", () =
 		{ cwd: "/tmp" },
 	) as { render(width: number): string[] };
 	rangedCall.render(80);
-	assert.ok(rangeColors.some((part) => part.color === "syntaxType" && part.text === "src/message-borders.ts"));
-	assert.ok(rangeColors.some((part) => part.color === "syntaxNumber" && part.text === ":410–564"));
-	assert.ok(!rangeColors.some((part) => part.color === "syntaxType" && part.text.includes(":410–564")));
+	assert.ok(
+		rangeColors.some((part) => part.color === "syntaxType" && part.text === "src/message-borders.ts"),
+		"read path should use syntaxType color",
+	);
+	assert.ok(
+		rangeColors.some((part) => part.color === "syntaxNumber" && part.text === ":410–564"),
+		"read range suffix should use syntaxNumber color",
+	);
+	assert.ok(
+		!rangeColors.some((part) => part.color === "syntaxType" && part.text.includes(":410–564")),
+		"range suffix must not be colored as part of the path",
+	);
 
 	for (const name of ["edit", "write", "ls"]) {
 		rangeColors.length = 0;
@@ -295,9 +330,9 @@ test("P1/P2 styles hashline segments, structures stdout, and grids ls", () => {
 		{ expanded: true },
 	) as { render: (w: number) => string[] };
 	colored.render(80);
-	assert.ok(styledColors.includes("dim"));
-	assert.ok(styledColors.includes("success"));
-	assert.ok(styledColors.includes("toolOutput"));
+	assert.ok(styledColors.includes("dim"), "hashline gutter should use dim color");
+	assert.ok(styledColors.includes("success"), "success marker should use success color");
+	assert.ok(styledColors.includes("toolOutput"), "hashline content should use toolOutput color");
 
 	const colorCalls = styledColors.length;
 	const plain = withEnv("PI_READMAP_RENDER_MODE", "plain", () => read.renderResult?.(
@@ -344,7 +379,10 @@ test("P1/P2 styles hashline segments, structures stdout, and grids ls", () => {
 		{ expanded: true },
 	) as { render: (w: number) => string[] };
 	const lsLines = listed.render(100);
-	assert.ok(lsLines.some((line) => line.includes("src") && line.includes("二.ts")));
+	assert.ok(
+		lsLines.some((line) => line.includes("src") && line.includes("二.ts")),
+		"wide ls should grid two entries on one row",
+	);
 	assertNoOverflow(lsLines.map(stripAnsi), 100);
 });
 
@@ -380,11 +418,11 @@ test("P2 uses inline/hunk metadata, split panes, and screen-reader labels", () =
 	});
 	const unified = diff.render(80).join("\\n");
 	assert.match(unified, /hunk 4-4/);
-	assert.ok(styledColors.includes("toolDiffRemoved"));
-	assert.ok(styledColors.includes("toolDiffAdded"));
+	assert.ok(styledColors.includes("toolDiffRemoved"), "removed spans should use toolDiffRemoved");
+	assert.ok(styledColors.includes("toolDiffAdded"), "added spans should use toolDiffAdded");
 
 	const split = diff.render(120);
-	assert.ok(split.some((line) => line.includes(" │ ")));
+	assert.ok(split.some((line) => line.includes(" │ ")), "wide diff should render split panes");
 	assertNoOverflow(split.map(stripAnsi), 120);
 
 	const screenReader = new DiffBodyComponent({
@@ -439,8 +477,14 @@ test("P3 pairs indexed split rows, counts ls entries, and handles large diffs", 
 		expanded: true,
 	});
 	const split = diff.render(120).map(stripAnsi);
-	assert.ok(split.find((line) => line.includes("old-A"))?.includes("new-A"));
-	assert.ok(split.find((line) => line.includes("old-B"))?.includes("new-B"));
+	assert.ok(
+		split.find((line) => line.includes("old-A"))?.includes("new-A"),
+		"indexed pair A should share one split row",
+	);
+	assert.ok(
+		split.find((line) => line.includes("old-B"))?.includes("new-B"),
+		"indexed pair B should share one split row",
+	);
 	assert.match(split.join("\n"), /- hunk 10-11/);
 	assert.match(split.join("\n"), /\+ hunk 20-21/);
 
@@ -523,7 +567,10 @@ test("read stays borderless while framed tools embed titles without native backg
 			prototype.render.call(readRuntime, 80));
 		assert.deepEqual(stripAnsi(coloredRead.join("\n")), "  ✓ colored body");
 		assert.doesNotMatch(stripAnsi(coloredRead.join("\n")), /[╭╮╰╯]/);
-		assert.ok(coloredRead.every((line) => line.length === 0 || stripAnsi(line).startsWith("  ")));
+		assert.ok(
+			coloredRead.every((line) => line.length === 0 || stripAnsi(line).startsWith("  ")),
+			"read lines should keep the two-column indent",
+		);
 		assert.equal(predecessorWidth, 78, "Read 的 2 列缩进必须先从正文宽度预算中扣除");
 
 		const terminalImage = "\x1b_Gf=100;AAAA\x1b\\";
@@ -609,7 +656,7 @@ test("read stays borderless while framed tools embed titles without native backg
 			const framed = withEnv("PI_READMAP_RENDER_MODE", "color", () =>
 				prototype.render.call({ ...readRuntime, toolName: "todo" }, width));
 			const top = stripAnsi(framed[0] ?? "");
-			assert.ok(framed.every((line) => visibleWidth(line) === width));
+			assert.ok(framed.every((line) => visibleWidth(line) === width), `frame must fill width ${width}`);
 			assert.match(top, /^╭─ /);
 			assert.match(top, /… ─+╮$/);
 		}
@@ -698,20 +745,23 @@ test("tool status background is optional, semantic, and cache-aware", () => {
 		settings.toolBackground = true;
 		const withBackground = withEnv("PI_READMAP_RENDER_MODE", "color", () =>
 			prototype.render.call(runtime, 80));
-		assert.ok(withBackground.slice(1, -1).every((line) => /\x1b\[48;5;240m/.test(line)));
+		assert.ok(
+			withBackground.slice(1, -1).every((line) => /\x1b\[48;5;240m/.test(line)),
+			"every inner line should carry the theme background",
+		);
 		assert.equal(withBackground.length, 5);
 		assert.ok(withBackground.every((line) => visibleWidth(line) === 80), "background frame must stay exactly within the requested width");
 		for (const line of withBackground.slice(1, -1)) {
 			const backgroundStart = line.indexOf("\x1b[48;5;240m");
 			const backgroundEnd = line.indexOf("\x1b[49m", backgroundStart);
-			assert.ok(backgroundStart >= 0 && backgroundEnd >= 0);
+			assert.ok(backgroundStart >= 0 && backgroundEnd >= 0, "background must open and close on the line");
 			assert.equal(visibleWidth(line.slice(0, backgroundStart)), 1, "background must start after the left rail");
 			assert.equal(visibleWidth(line.slice(backgroundEnd + "\x1b[49m".length)), 1, "background must end before the right rail");
 		}
 		assert.match(stripAnsi(withBackground.at(-2) ?? ""), /^┃\s+│$/, "framed tools keep a padded row above the bottom border");
 		assert.doesNotMatch(withBackground[0] ?? "", /\x1b\[48[;:]/);
 		assert.doesNotMatch(withBackground.at(-1) ?? "", /\x1b\[48[;:]/);
-		assert.ok(backgroundCalls.includes("toolSuccessBg"));
+		assert.ok(backgroundCalls.includes("toolSuccessBg"), "success state should request toolSuccessBg");
 
 		currentTheme = alternateTheme;
 		const withAlternateTheme = withEnv("PI_READMAP_RENDER_MODE", "color", () =>
@@ -744,7 +794,7 @@ test("tool status background is optional, semantic, and cache-aware", () => {
 		const running = withEnv("PI_READMAP_RENDER_MODE", "color", () =>
 			prototype.render.call({ ...runtime, isPartial: true, result: undefined }, 80));
 		assert.match(running.join("\n"), /\x1b\[48;5;240m/);
-		assert.ok(backgroundCalls.some((call) => call === "toolPendingBg"));
+		assert.ok(backgroundCalls.some((call) => call === "toolPendingBg"), "running state should request toolPendingBg");
 
 		backgroundCalls.length = 0;
 		const failed = withEnv("PI_READMAP_RENDER_MODE", "color", () =>
@@ -753,7 +803,7 @@ test("tool status background is optional, semantic, and cache-aware", () => {
 				result: { isError: true, content: [{ type: "text" }] },
 			}, 80));
 		assert.match(failed.join("\n"), /\x1b\[48;5;240m/);
-		assert.ok(backgroundCalls.some((call) => call === "toolErrorBg"));
+		assert.ok(backgroundCalls.some((call) => call === "toolErrorBg"), "failed state should request toolErrorBg");
 	} finally {
 		cleanup();
 		prototype.render = originalRender;
@@ -787,11 +837,11 @@ test("tool status background covers Bash success and cancellation at supported w
 						expanded: false,
 					}, width));
 				const backgroundLines = lines.filter((line) => line.includes("\x1b[48;5;242m"));
-				assert.ok(backgroundLines.length > 0);
-				assert.ok(backgroundCalls.includes(expectedBackground));
+				assert.ok(backgroundLines.length > 0, "bash body should carry the state background");
+				assert.ok(backgroundCalls.includes(expectedBackground), `bash ${status} should request ${expectedBackground}`);
 				assert.doesNotMatch(lines[1] ?? "", /\x1b\[48[;:]/, "标题上框不能带状态底色");
 				assert.doesNotMatch(lines.at(-1) ?? "", /\x1b\[48[;:]/, "底框不能带状态底色");
-				assert.ok(lines.every((line) => visibleWidth(line) <= width));
+				assert.ok(lines.every((line) => visibleWidth(line) <= width), `bash frame must fit width ${width}`);
 			}
 		}
 	} finally {
@@ -829,12 +879,15 @@ test("running tool frames keep wide styled borders stable and low-churn", () => 
 			const completed = withEnv("PI_READMAP_RENDER_MODE", "color", () =>
 				prototype.render.call({ isPartial: false, result: { isError: false }, toolName: "edit" }, width));
 			const firstPlain = first.map(stripAnsi);
-			assert.ok(first.slice(1).every((line) => visibleWidth(line) === width));
+			assert.ok(first.slice(1).every((line) => visibleWidth(line) === width), `running frame must fill width ${width}`);
 			assert.equal(firstPlain[1]?.at(-1), "╮");
 			assert.match(first[1] ?? "", /╮\x1b\[39m$/);
 			assert.ok((first[1]?.match(/\x1b\[38;2;/g) ?? []).length < 8,
 				"running title border must not color the long rule cell by cell");
-			assert.ok(firstPlain.slice(2, -1).every((line) => line.endsWith("│")));
+			assert.ok(
+				firstPlain.slice(2, -1).every((line) => line.endsWith("│")),
+				"running body rows must keep the right rail",
+			);
 			assert.equal(firstPlain.at(-1)?.at(-1), "╯");
 			assert.match(first.at(-1) ?? "", /╯\x1b\[39m$/);
 			assert.equal((first.at(-1)?.match(/\x1b\[38;2;/g) ?? []).length, 1,
@@ -887,7 +940,7 @@ test("user messages use a titleless rail frame distinct from tool cards", () => 
 				const rendered = withEnv("PI_READMAP_RENDER_MODE", "color", () =>
 					userPrototype.render.call({ text }, width));
 				const plain = rendered.map(stripAnsi);
-				assert.ok(rendered.every((line) => visibleWidth(line) === width));
+				assert.ok(rendered.every((line) => visibleWidth(line) === width), `user frame must fill width ${width}`);
 				assert.equal(plain[0], `╭${"─".repeat(width - 2)}╮`);
 				assert.equal(plain.at(-1), `╰${"─".repeat(width - 2)}╯`);
 			}
@@ -979,8 +1032,14 @@ test("edit renderer collapses by default with limited diff preview", () => {
 	const text = stripAnsi(collapsed.render(80).join("\n"));
 	assert.match(text, /Edit.*\+10 −10/);
 	assert.match(text, /rename|warning/);
-	assert.ok(statsColors.some((part) => part.color === "toolDiffAdded" && part.text === "+10"));
-	assert.ok(statsColors.some((part) => part.color === "toolDiffRemoved" && part.text === "−10"));
+	assert.ok(
+		statsColors.some((part) => part.color === "toolDiffAdded" && part.text === "+10"),
+		"added stat should use toolDiffAdded",
+	);
+	assert.ok(
+		statsColors.some((part) => part.color === "toolDiffRemoved" && part.text === "−10"),
+		"removed stat should use toolDiffRemoved",
+	);
 	// 折叠态有预览，但不铺满全部 20 行
 	assert.match(text, /old-0|new-1/);
 	assert.match(text, /14 more diff lines · Ctrl\+O/);
@@ -1097,15 +1156,9 @@ test("parallel write calls keep independent animation state", () => {
 });
 
 
-test("shared write timer isolates a failing component", () => {
-	const originalSetInterval = globalThis.setInterval;
-	const originalClearInterval = globalThis.clearInterval;
-	let tick: (() => void) | undefined;
-	globalThis.setInterval = ((handler: (...args: unknown[]) => void) => {
-		tick = () => handler();
-		return { unref() {} } as unknown as ReturnType<typeof setInterval>;
-	}) as typeof setInterval;
-	globalThis.clearInterval = (() => undefined) as typeof clearInterval;
+test("shared write timer isolates a failing component", (t) => {
+	// node:test 的 mock timers 拦截全局 setInterval/clearInterval，测试结束自动还原。
+	t.mock.timers.enable({ apis: ["setInterval"] });
 
 	const tool = makeTool("write");
 	patchReadmapTool(tool, { writeAnimation: true });
@@ -1122,16 +1175,13 @@ test("shared write timer isolates a failing component", () => {
 	) as { render: (width: number) => string[]; stop: () => void };
 
 	try {
-		assert.ok(tick);
-		assert.doesNotThrow(() => tick?.());
-		assert.equal(rightInvalidations, 1);
-		assert.doesNotMatch(stripAnsi(left.render(80).join("\n")), /▏/);
-		assert.match(stripAnsi(right.render(80).join("\n")), /r▏/);
+		assert.doesNotThrow(() => t.mock.timers.tick(40), "shared tick must survive a throwing invalidate");
+		assert.equal(rightInvalidations, 1, "healthy component should keep animating after a peer fails");
+		assert.doesNotMatch(stripAnsi(left.render(80).join("\n")), /▏/, "failed component must drop its cursor");
+		assert.match(stripAnsi(right.render(80).join("\n")), /r▏/, "healthy component keeps revealing content");
 	} finally {
 		left.stop();
 		right.stop();
-		globalThis.setInterval = originalSetInterval;
-		globalThis.clearInterval = originalClearInterval;
 	}
 });
 
@@ -1564,5 +1614,5 @@ test("theme fg throw falls back to plain text", () => {
 
 test("clampLine never exceeds width", () => {
 	const line = clampLine("hello world ".repeat(20), 40);
-	assert.ok(visibleWidth(line) <= 40);
+	assert.ok(visibleWidth(line) <= 40, "clampLine must not exceed the requested width");
 });

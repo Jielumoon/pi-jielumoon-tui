@@ -8,6 +8,10 @@ import {
 	type ExtensionCommandContext,
 	type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
+import { formatUsageReset } from "../duration.ts";
+import { asPlainRecord as asObject, isPlainRecord as isObject } from "../guards.ts";
+
+export { formatUsageReset };
 
 export type UsageProviderId = "openai-codex" | "anthropic" | "openrouter" | "xai";
 export type UsageUnit = "percent" | "usd";
@@ -98,14 +102,6 @@ class UsageQueryError extends Error {
 	}
 }
 
-function isObject(value: unknown): value is Record<string, unknown> {
-	return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
-
-function asObject(value: unknown): Record<string, unknown> | undefined {
-	return isObject(value) ? value : undefined;
-}
-
 function asString(value: unknown): string | undefined {
 	return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
@@ -135,20 +131,6 @@ function toIsoDate(value: unknown, unit: "seconds" | "iso" = "iso"): string | un
 				: undefined;
 	if (!date || Number.isNaN(date.getTime())) return undefined;
 	return date.toISOString();
-}
-
-export function formatUsageReset(resetAt: string | undefined, now = Date.now()): string | undefined {
-	if (!resetAt) return undefined;
-	const time = Date.parse(resetAt);
-	if (Number.isNaN(time)) return undefined;
-	const diff = time - now;
-	if (diff <= 0) return "now";
-	const minutes = Math.floor(diff / 60_000);
-	if (minutes < 60) return `${minutes}m`;
-	const hours = Math.floor(minutes / 60);
-	if (hours < 24) return `${hours}h`;
-	const days = Math.floor(hours / 24);
-	return `${days}d`;
 }
 
 function formatPercent(value: number): string {
@@ -292,9 +274,9 @@ function addCodexWindow(
 	if (!data) return;
 	const usedPercent = asNumber(data.used_percent);
 	if (usedPercent === undefined) return;
-	const windowMinutes = asNumber(data.limit_window_seconds);
+	const windowSeconds = asNumber(data.limit_window_seconds);
 	windows.push({
-		label: formatWindowLabel(windowMinutes ? Math.ceil(windowMinutes / 60) : fallbackMinutes, label),
+		label: formatWindowLabel(windowSeconds ? Math.ceil(windowSeconds / 60) : fallbackMinutes, label),
 		usedPercent: clampPercent(usedPercent),
 		unit: "percent",
 		resetAt: toIsoDate(data.reset_at, "seconds"),
@@ -572,14 +554,18 @@ async function fetchOpenRouter(auth: UsageAuth, signal: AbortSignal, fetchImpl: 
 
 async function fetchXai(auth: UsageAuth, signal: AbortSignal, fetchImpl: UsageFetch): Promise<UsageSnapshot> {
 	const headers = requestHeaders(auth, { "x-xai-token-auth": "xai-grok-cli" });
-	let monthly: unknown | undefined;
-	try {
-		monthly = await requestJson("https://cli-chat-proxy.grok.com/v1/billing", headers, signal, fetchImpl);
-	} catch (error) {
+	// 两个端点并行请求；monthly 仅在鉴权失败时致命，其余失败只丢弃该窗口。
+	const [monthlyResult, weeklyResult] = await Promise.allSettled([
+		requestJson("https://cli-chat-proxy.grok.com/v1/billing", headers, signal, fetchImpl),
+		requestJson("https://cli-chat-proxy.grok.com/v1/billing?format=credits", headers, signal, fetchImpl),
+	]);
+	if (monthlyResult.status === "rejected") {
+		const error = monthlyResult.reason;
 		if (error instanceof UsageQueryError && (error.status === 401 || error.status === 403)) throw error;
 	}
-	const weekly = await requestJson("https://cli-chat-proxy.grok.com/v1/billing?format=credits", headers, signal, fetchImpl);
-	return normalizeXaiUsage(monthly, weekly);
+	if (weeklyResult.status === "rejected") throw weeklyResult.reason;
+	const monthly = monthlyResult.status === "fulfilled" ? monthlyResult.value : undefined;
+	return normalizeXaiUsage(monthly, weeklyResult.value);
 }
 
 export async function fetchProviderUsage(
@@ -656,6 +642,7 @@ export class SubscriptionUsageController implements SubscriptionUsageSource {
 	private readonly now: () => number;
 	private readonly listeners = new Set<() => void>();
 	private activeController: AbortController | undefined;
+	private inflight: { cacheKey: string; promise: Promise<UsageSnapshot | undefined> } | undefined;
 	private generation = 0;
 	private active = false;
 	private timer: ReturnType<typeof setTimeout> | undefined;
@@ -715,6 +702,7 @@ export class SubscriptionUsageController implements SubscriptionUsageSource {
 			this.generation += 1;
 			this.activeController?.abort();
 			this.activeController = undefined;
+			this.inflight = undefined;
 			this.clearTimer();
 			this.cache.clear();
 			this.failureUntil.clear();
@@ -733,20 +721,14 @@ export class SubscriptionUsageController implements SubscriptionUsageSource {
 		}
 		if (this.state?.modelIdentity !== identity) this.setState(undefined);
 
-		const requestGeneration = ++this.generation;
-		this.activeController?.abort();
-		const controller = new AbortController();
-		this.activeController = controller;
-		let cacheKey: string | undefined;
-		let cached: CacheEntry | undefined;
 		try {
 			const auth = await resolveUsageAuth(ctx, providerId);
 			if (!auth) {
 				this.setNotice(identity, providerId, "unavailable");
 				return undefined;
 			}
-			cacheKey = `${identity}:${authFingerprint(providerId, auth)}`;
-			cached = this.cache.get(cacheKey);
+			const cacheKey = `${identity}:${authFingerprint(providerId, auth)}`;
+			const cached = this.cache.get(cacheKey);
 			if (!force && cached && this.now() - cached.fetchedAt < USAGE_CACHE_TTL_MS) {
 				this.setReady(identity, cached.usage);
 				this.schedule(ctx, USAGE_CACHE_TTL_MS - (this.now() - cached.fetchedAt));
@@ -760,6 +742,39 @@ export class SubscriptionUsageController implements SubscriptionUsageSource {
 				return cached?.usage;
 			}
 
+			// Single-flight：相同凭证的在飞请求直接复用（含 force——它已经是最新数据），
+			// turn_start/agent_end 等事件风暴不再反复 abort 并重发请求。
+			if (this.inflight?.cacheKey === cacheKey) return await this.inflight.promise;
+			const promise = this.fetchAndStore(ctx, providerId, identity, cacheKey, cached, auth);
+			this.inflight = { cacheKey, promise };
+			try {
+				return await promise;
+			} finally {
+				if (this.inflight?.promise === promise) this.inflight = undefined;
+			}
+		} catch (error) {
+			// 认证解析阶段的失败：无 cacheKey 可退避，只提示并稍后重试。
+			if (isStaleContextError(error)) return undefined;
+			this.setNotice(identity, providerId, noticeFor(error));
+			this.schedule(ctx, FAILURE_BACKOFF_MS);
+			return undefined;
+		}
+	}
+
+	private async fetchAndStore(
+		ctx: ExtensionContext | ExtensionCommandContext,
+		providerId: UsageProviderId,
+		identity: string,
+		cacheKey: string,
+		cached: CacheEntry | undefined,
+		auth: UsageAuth,
+	): Promise<UsageSnapshot | undefined> {
+		// 只有真正发起网络请求时才作废旧请求；缓存命中不再打断在飞请求。
+		const requestGeneration = ++this.generation;
+		this.activeController?.abort();
+		const controller = new AbortController();
+		this.activeController = controller;
+		try {
 			const usage = await fetchProviderUsage(providerId, auth, controller.signal, this.fetchImpl);
 			if (controller.signal.aborted || requestGeneration !== this.generation) return undefined;
 			this.cache.set(cacheKey, { usage, fetchedAt: this.now() });
@@ -771,7 +786,7 @@ export class SubscriptionUsageController implements SubscriptionUsageSource {
 			if (controller.signal.aborted || requestGeneration !== this.generation || isStaleContextError(error)) return undefined;
 			const retryAfterMs = error instanceof UsageQueryError ? error.retryAfterMs : undefined;
 			const backoff = Math.max(FAILURE_BACKOFF_MS, retryAfterMs ?? 0);
-			if (cacheKey) this.failureUntil.set(cacheKey, this.now() + backoff);
+			this.failureUntil.set(cacheKey, this.now() + backoff);
 			if (error instanceof UsageQueryError && error.status === 429 && cached) {
 				this.setReady(identity, cached.usage);
 			} else {

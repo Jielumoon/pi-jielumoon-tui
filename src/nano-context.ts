@@ -7,20 +7,22 @@ import {
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { formatTokens } from "./footer/format.ts";
 import type { FooterSettings } from "./footer/types.ts";
+import { rgbForeground, type RGB } from "./gradient.ts";
+import { isRecord } from "./guards.ts";
+import { estimateTextTokens } from "./token-estimate.ts";
 
 const WIDGET_KEY = "nano-context";
-const CHARACTERS_PER_TOKEN = 4;
 const IMAGE_TOKEN_ESTIMATE = 1200;
 
 const COMPACT_BAR_MIN_WIDTH = 8;
 const COMPACT_BAR_MAX_WIDTH = 20;
 
-const USED_SEGMENTS = [
-	{ key: "system", color: "#82CA7A" },
-	{ key: "prompt", color: "#E89BC1" },
-	{ key: "assistant", color: "#8BC7C2" },
-	{ key: "thinking", color: "#73D0D2" },
-	{ key: "tools", color: "#D8A657" },
+const USED_SEGMENTS: ReadonlyArray<{ key: "system" | "prompt" | "assistant" | "thinking" | "tools"; color: RGB }> = [
+	{ key: "system", color: [130, 202, 122] }, // #82CA7A
+	{ key: "prompt", color: [232, 155, 193] }, // #E89BC1
+	{ key: "assistant", color: [139, 199, 194] }, // #8BC7C2
+	{ key: "thinking", color: [115, 208, 210] }, // #73D0D2
+	{ key: "tools", color: [216, 166, 87] }, // #D8A657
 ] as const;
 
 
@@ -44,21 +46,6 @@ const emptyContextSegments = (): WritableContextSegments => ({
 });
 
 const fitStyledText = (text: string, width: number): string => truncateToWidth(text, width, "…");
-
-const estimateTextTokens = (text: string): number => Math.ceil(text.length / CHARACTERS_PER_TOKEN);
-
-
-const foreground = (hex: string, text: string): string => {
-	const value = Number.parseInt(hex.replace(/^#/, ""), 16);
-	const red = (value >> 16) & 0xff;
-	const green = (value >> 8) & 0xff;
-	const blue = value & 0xff;
-	return `\x1b[38;2;${red};${green};${blue}m${text}\x1b[39m`;
-};
-
-
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-	!!value && typeof value === "object";
 
 const contentRecords = (content: unknown): readonly Record<string, unknown>[] =>
 	Array.isArray(content) ? content.filter(isRecord) : [];
@@ -234,7 +221,7 @@ const renderCompactBar = (snapshot: ContextSnapshot, width: number, theme: Theme
 	const values = [...USED_SEGMENTS.map((segment) => snapshot.segments[segment.key]), freeTokens];
 	const columns = allocateBarColumns(values, width);
 	const used = USED_SEGMENTS
-		.map((segment, index) => foreground(segment.color, "█".repeat(columns[index] ?? 0)))
+		.map((segment, index) => rgbForeground(segment.color, "█".repeat(columns[index] ?? 0)))
 		.join("");
 	const free = theme.fg("dim", "░".repeat(columns[USED_SEGMENTS.length] ?? 0));
 	return `${used}${free}`;

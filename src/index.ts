@@ -5,7 +5,7 @@ import installThinking from "./thinking.ts";
 import installFooter from "./vibrant-footer.ts";
 import installWorking from "./working.ts";
 import installSakuraEditor from "./sakura-editor.ts";
-import installReadmapRenderers from "./readmap-renderers.ts";
+import installReadmapRenderers from "./readmap-renderers/index.ts";
 import installSubscriptionUsage from "./footer/subscription-usage.ts";
 import { readFooterSettings } from "./footer/settings.ts";
 

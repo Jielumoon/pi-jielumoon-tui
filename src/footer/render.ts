@@ -124,7 +124,8 @@ function renderQuotaWindow(
 	showReset: boolean,
 ): string | null {
 	if (window.unit === "usd" && typeof window.remaining === "number") {
-		return theme.fg("dim", "余额 ") + theme.fg("success", `$${Math.max(0, window.remaining).toFixed(2)}`);
+		// 与百分比窗口一样复用来源标签（如 Key），保持 Footer 标签统一为英文。
+		return theme.fg("dim", `${window.label} `) + theme.fg("success", `$${Math.max(0, window.remaining).toFixed(2)}`);
 	}
 	if (typeof window.usedPercent !== "number") return null;
 
@@ -245,13 +246,26 @@ function renderStatsLines(
 }
 
 const PLANNING_STATUS_KEY = "planning-with-files";
+const QUIET_STATE_PATTERN = "(?:ready|complete|completed|idle|ok)";
+const QUIET_STATE_RE = new RegExp(`^${QUIET_STATE_PATTERN}$`, "i");
+const PLANNING_DONE_RE = /^\d+\/\d+\s+phases?\s+completed?$/i;
+/** 状态 key 来自扩展 id，集合有限；按 key 缓存正则避免每帧重新编译。 */
+const quietKeyRegexCache = new Map<string, RegExp>();
+
+function quietKeyRegex(key: string): RegExp {
+	let regex = quietKeyRegexCache.get(key);
+	if (!regex) {
+		const escapedKey = key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+		regex = new RegExp(`^${escapedKey}\\s+${QUIET_STATE_PATTERN}$`, "i");
+		quietKeyRegexCache.set(key, regex);
+	}
+	return regex;
+}
 
 function isQuietExtensionStatus(key: string, text: string): boolean {
-	const state = "(?:ready|complete|completed|idle|ok)";
-	if (new RegExp(`^${state}$`, "i").test(text)) return true;
-	if (key === PLANNING_STATUS_KEY && /^\d+\/\d+\s+phases?\s+completed?$/i.test(text)) return true;
-	const escapedKey = key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-	return new RegExp(`^${escapedKey}\\s+${state}$`, "i").test(text);
+	if (QUIET_STATE_RE.test(text)) return true;
+	if (key === PLANNING_STATUS_KEY && PLANNING_DONE_RE.test(text)) return true;
+	return quietKeyRegex(key).test(text);
 }
 
 function renderExtensionStatusLine(

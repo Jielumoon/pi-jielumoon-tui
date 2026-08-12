@@ -1,8 +1,27 @@
-import { readFileSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
 import { join as pathJoin } from "node:path";
 import { estimateTokens, getAgentDir, type ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { formatCooldownDuration } from "../duration.ts";
+import { asRecord } from "../guards.ts";
+import { estimateTextTokens } from "../token-estimate.ts";
 import { formatTokens, sanitizeStatusText } from "./format.ts";
 import type { BlackholeCooldown, BlackholeEntry, BlackholeStatus } from "./types.ts";
+
+/**
+ * 配置与冷却文件按 mtime+size 缓存解析结果。Footer 在 context/message_end 等
+ * 高频事件上刷新，未变化时只付一次 stat 的成本，不再重复 read+parse。
+ */
+type JsonFileCacheEntry = { mtimeMs: number; size: number; value: unknown };
+const jsonFileCache = new Map<string, JsonFileCacheEntry>();
+
+function readJsonFileCached(path: string): unknown {
+	const stats = statSync(path);
+	const cached = jsonFileCache.get(path);
+	if (cached && cached.mtimeMs === stats.mtimeMs && cached.size === stats.size) return cached.value;
+	const value = JSON.parse(readFileSync(path, "utf8")) as unknown;
+	jsonFileCache.set(path, { mtimeMs: stats.mtimeMs, size: stats.size, value });
+	return value;
+}
 
 type BlackholeConfig = {
 	compaction?: "auto" | "manual" | "off";
@@ -18,10 +37,6 @@ const BLACKHOLE_OBSERVATIONS = "om.observations.recorded";
 const BLACKHOLE_REFLECTIONS = "om.reflections.recorded";
 const BLACKHOLE_DROPPED = "om.observations.dropped";
 
-function asRecord(value: unknown): Record<string, unknown> | null {
-	return value && typeof value === "object" ? (value as Record<string, unknown>) : null;
-}
-
 function positiveNumber(value: unknown, fallback: number): number {
 	return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : fallback;
 }
@@ -29,7 +44,7 @@ function positiveNumber(value: unknown, fallback: number): number {
 function readBlackholeCooldowns(): BlackholeCooldown[] {
 	try {
 		const cooldownPath = pathJoin(getAgentDir(), "pi-blackhole", "pi-blackhole-cooldown.json");
-		const raw = asRecord(JSON.parse(readFileSync(cooldownPath, "utf8")));
+		const raw = asRecord(readJsonFileCached(cooldownPath));
 		if (!raw) return [];
 
 		const now = Date.now();
@@ -47,10 +62,6 @@ function readBlackholeCooldowns(): BlackholeCooldown[] {
 	} catch {
 		return [];
 	}
-}
-
-function estimateTextTokens(text: string): number {
-	return Math.ceil(text.length / 4);
 }
 
 function estimateBlackholeEntryTokens(entry: BlackholeEntry): number {
@@ -85,6 +96,23 @@ function isBlackholeSourceEntry(entry: BlackholeEntry): boolean {
 	return entry.type === "message" || entry.type === "custom_message" || entry.type === "branch_summary";
 }
 
+/**
+ * 会话条目只追加、内容不可变，token 估算可以跨刷新复用。
+ * 唯一的例外是数组末尾的条目：它可能仍在流式写入，调用方应禁用缓存。
+ */
+const entryTokenCache = new WeakMap<object, number>();
+
+function cachedEntryTokens(entry: BlackholeEntry, cacheable: boolean): number {
+	if (!cacheable || typeof entry !== "object" || entry === null) {
+		return estimateBlackholeEntryTokens(entry);
+	}
+	const cached = entryTokenCache.get(entry);
+	if (cached !== undefined) return cached;
+	const tokens = estimateBlackholeEntryTokens(entry);
+	entryTokenCache.set(entry, tokens);
+	return tokens;
+}
+
 type BlackholeBranchSummary = {
 	observerTokens: number;
 	reflectorTokens: number;
@@ -104,7 +132,10 @@ function updateCoverageIndex(
 	return index !== undefined && index > current ? index : current;
 }
 
-/** 每次基于当前 branch 重新计算；只消除一次刷新内部的重复 token 扫描，不保存历史结果。 */
+/**
+ * 每次基于当前 branch 重新计算（保持指标实时），但不可变条目的 token 估算
+ * 通过 WeakMap 跨刷新复用；末尾条目可能仍在流式，始终重新估算。
+ */
 export function summarizeBlackholeBranch(entries: BlackholeEntry[]): BlackholeBranchSummary {
 	const indexes = new Map<string, number>();
 	const sourceTokenPrefix: number[] = [0];
@@ -114,7 +145,9 @@ export function summarizeBlackholeBranch(entries: BlackholeEntry[]): BlackholeBr
 		const entry = entries[index]!;
 		if (typeof entry.id === "string") indexes.set(entry.id, index);
 		if (entry.type === "compaction") latestCompactionIndex = index;
-		const sourceTokens = isBlackholeSourceEntry(entry) ? estimateBlackholeEntryTokens(entry) : 0;
+		const sourceTokens = isBlackholeSourceEntry(entry)
+			? cachedEntryTokens(entry, index < entries.length - 1)
+			: 0;
 		sourceTokenPrefix.push(sourceTokenPrefix[index]! + sourceTokens);
 	}
 
@@ -179,7 +212,7 @@ export function summarizeBlackholeBranch(entries: BlackholeEntry[]): BlackholeBr
 export function collectBlackholeStatus(ctx: ExtensionContext): BlackholeStatus | null {
 	try {
 		const configPath = pathJoin(getAgentDir(), "pi-blackhole", "pi-blackhole-config.json");
-		const config = asRecord(JSON.parse(readFileSync(configPath, "utf8"))) as BlackholeConfig | null;
+		const config = asRecord(readJsonFileCached(configPath)) as BlackholeConfig | undefined;
 		const manager = ctx.sessionManager as typeof ctx.sessionManager & { getBranch?: () => unknown };
 		if (!config || typeof manager.getBranch !== "function") return null;
 
@@ -218,14 +251,6 @@ export function blackholeMetricTone(
 	if (pressure >= 1) return "error";
 	if (pressure >= 0.7) return "warning";
 	return "success";
-}
-
-function formatCooldownDuration(ms: number): string {
-	const minutes = Math.max(1, Math.ceil(ms / 60_000));
-	if (minutes < 60) return `${minutes}m`;
-	const hours = Math.floor(minutes / 60);
-	const remainder = minutes % 60;
-	return remainder > 0 ? `${hours}h${remainder}m` : `${hours}h`;
 }
 
 export function formatBlackholeCooldowns(cooldowns: BlackholeCooldown[]): string {

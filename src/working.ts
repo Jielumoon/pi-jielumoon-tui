@@ -7,21 +7,14 @@ import type {
 	WorkingIndicatorOptions,
 } from "@earendil-works/pi-coding-agent";
 import { Loader, Text } from "@earendil-works/pi-tui";
-import { SAKURA_SPINNER_FRAMES } from "./gradient";
+import { formatElapsed } from "./duration";
+import { renderSakuraSpinner, SAKURA_SPINNER_FRAMES } from "./gradient";
 import { installPrototypePatch } from "./prototype-patch-registry";
 
 const WORKING_UPDATE_INTERVAL_MS = 1000;
 const SPINNER_INTERVAL_MS = 80;
 const MIN_ELAPSED_TRANSCRIPT_MS = 5000;
 const ELAPSED_ENTRY_TYPE = "pi-jielumoon-elapsed";
-
-
-function formatElapsed(milliseconds: number): string {
-	const totalSeconds = Math.max(0, Math.floor(milliseconds / 1000));
-	const minutes = Math.floor(totalSeconds / 60);
-	const seconds = totalSeconds % 60;
-	return minutes > 0 ? `${minutes}m ${seconds}s` : `${seconds}s`;
-}
 
 function indicator(): WorkingIndicatorOptions {
 	return {
@@ -61,7 +54,6 @@ function isAnimatedStatus(loader: StatusLoaderState, message: string): boolean {
  * Loader 原型；清理它会让后续 session 静默退回 Pi 默认渲染。
  */
 function installStatusGradients(): void {
-	const spinnerTicks = new WeakMap<object, number>();
 	try {
 		installPrototypePatch(
 			Loader.prototype,
@@ -74,9 +66,8 @@ function installStatusGradients(): void {
 					return Reflect.apply(predecessor, receiver, args);
 				}
 
-				const tick = spinnerTicks.get(receiver as object) ?? 0;
-				spinnerTicks.set(receiver as object, tick + 1);
-				const spinner = SAKURA_SPINNER_FRAMES[tick % SAKURA_SPINNER_FRAMES.length] ?? "";
+				// 按壁钟取帧，与工具卡 spinner 节奏一致；不依赖宿主调用频率。
+				const spinner = renderSakuraSpinner();
 				loader.setText(`${spinner} ${message}`);
 				loader.ui?.requestRender?.();
 				return undefined;

@@ -67,6 +67,7 @@ export default function vibrantFooter(
 		refreshTimer = setInterval(() => {
 			if (enabled && activeContext) refreshSnapshot(activeContext);
 		}, REFRESH_INTERVAL_MS);
+		refreshTimer.unref?.();
 	};
 
 	const applyFooter = (ctx: ExtensionContext): void => {

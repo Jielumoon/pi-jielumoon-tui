@@ -4,6 +4,14 @@
   "description": "pi-vibrant-footer with a sakura-style Thought trail for Pi",
   "type": "module",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Jielumoon/pi-jielumoon-tui.git"
+  },
+  "homepage": "https://github.com/Jielumoon/pi-jielumoon-tui#readme",
+  "bugs": {
+    "url": "https://github.com/Jielumoon/pi-jielumoon-tui/issues"
+  },
   "keywords": [
     "pi-package",
     "pi-extension",
@@ -18,6 +26,7 @@
   },
   "scripts": {
     "test": "tsx --test tests/*.test.ts",
+    "test:coverage": "tsx --test --experimental-test-coverage tests/*.test.ts",
     "typecheck": "tsc --noEmit",
     "pack:check": "npm pack --dry-run --ignore-scripts"
   },

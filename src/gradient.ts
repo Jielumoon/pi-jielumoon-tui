@@ -63,7 +63,12 @@ function foreground(color: RGB, text: string): string {
 export function renderSakuraGradient(text: string, phase = 0): string {
 	const cacheKey = phase === 0 ? text : `${phase.toFixed(3)}|${text}`;
 	const cached = gradientCache.get(cacheKey);
-	if (cached !== undefined) return cached;
+	if (cached !== undefined) {
+		// Map 按插入序淘汰；命中时重插使其成为最新条目（LRU 而非 FIFO）。
+		gradientCache.delete(cacheKey);
+		gradientCache.set(cacheKey, cached);
+		return cached;
+	}
 	const chars = [...text];
 	if (chars.length === 0) return text;
 	const span = Math.max(1, chars.length - 1);
@@ -96,7 +101,11 @@ export function renderSakuraSpinner(now = Date.now(), intervalMs = 80): string {
 export function renderSakuraFrameGradient(text: string): string {
 	const cacheKey = `frame|${text}`;
 	const cached = gradientCache.get(cacheKey);
-	if (cached !== undefined) return cached;
+	if (cached !== undefined) {
+		gradientCache.delete(cacheKey);
+		gradientCache.set(cacheKey, cached);
+		return cached;
+	}
 	const chars = [...text];
 	if (chars.length === 0) return text;
 	const span = Math.max(1, chars.length - 1);

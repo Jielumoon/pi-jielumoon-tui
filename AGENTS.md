@@ -10,8 +10,9 @@
 - `src/message-borders.ts`：用户消息、工具和 Bash 卡片样式
 - `src/sakura-editor.ts`：Sakura 圆角输入框；保留 Pi 原生编辑，遇其它 Editor 时让位
 - `src/working.ts`：Working Shimmer、spinner 与耗时 transcript
-- `src/readmap-renderers.ts`：接管 read / edit / write / bash / ls 的展示与折叠，不改 execute
+- `src/readmap-renderers/`：接管 read / edit / write / bash / ls 的展示与折叠，不改 execute；入口 `index.ts`，内部按 presentation / header / diff / write-stream / results / patch 分层
 - `src/prototype-patch-registry.ts`：原型补丁安装与清理
+- `src/ansi.ts`、`src/guards.ts`、`src/duration.ts`、`src/token-estimate.ts`：跨模块共享的样式剥离、类型判断、时长格式化与 token 估算
 - `tests/`：Node `assert` + `tsx --test` 回归；`plan/archive/` 仅存已完成计划
 
 ## Build, Test, and Development Commands

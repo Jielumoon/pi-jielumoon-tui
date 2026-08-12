@@ -1,5 +1,6 @@
 import { AssistantMessageComponent, type Theme } from "@earendil-works/pi-coding-agent";
 import { type Component, truncateToWidth } from "@earendil-works/pi-tui";
+import { removeTrailingPadding, stripAnsi } from "./ansi";
 import {
 	renderSakuraGradient,
 	rgbForeground,
@@ -33,21 +34,8 @@ const BODY_TINT: RGB = [216, 202, 220]; // soft petal-lilac body
 const HIDDEN_LABEL_PLAIN = "✦ Thought";
 const THINKING_PREFIX_PATTERN = /^\s*Thinking\s*[:：]\s*/i;
 
-function stripAnsi(line: string): string {
-	return line
-		.replace(/\x1b\][^\x07]*(?:\x07|\x1b\\)/g, "")
-		.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "");
-}
-
 function isBlankRenderedLine(line: string): boolean {
 	return stripAnsi(line).trim().length === 0;
-}
-
-function removeTrailingPadding(line: string): string {
-	return line.replace(
-		/ +((?:(?:\x1b\[[0-?]*[ -/]*[@-~])|(?:\x1b\][^\x07]*(?:\x07|\x1b\\)))*)$/,
-		"$1",
-	);
 }
 
 function removeOutputPadding(line: string): string {
@@ -229,6 +217,8 @@ function recolorHiddenThinkingLines(lines: string[]): string[] {
 	}
 
 	return lines.map((line) => {
+		// 逐行快速跳过：长助手消息里绝大多数行与思考标签无关。
+		if (!line.includes("Thinking") && !line.includes("Thought") && !line.includes("✦")) return line;
 		const plain = stripAnsi(line).trim();
 		let label: string | undefined;
 		if (

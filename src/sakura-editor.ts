@@ -5,6 +5,7 @@ import {
 	type KeybindingsManager,
 } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth, type EditorTheme, type TUI } from "@earendil-works/pi-tui";
+import { stripAnsi } from "./ansi.ts";
 import { renderSakuraFrameGradient, renderSakuraSolid } from "./gradient.ts";
 
 const FRAME_CHROME_WIDTH = 4;
@@ -12,12 +13,6 @@ const MIN_CONTENT_WIDTH = 3;
 const MIN_FRAME_WIDTH = FRAME_CHROME_WIDTH + MIN_CONTENT_WIDTH;
 
 type EditorFactory = NonNullable<ReturnType<ExtensionContext["ui"]["getEditorComponent"]>>;
-
-function stripAnsi(text: string): string {
-	return text
-		.replace(/\x1b\][^\x07]*(?:\x07|\x1b\\)/g, "")
-		.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "");
-}
 
 function fitLine(line: string, width: number): string {
 	const clipped = truncateToWidth(line, Math.max(0, width), "");
