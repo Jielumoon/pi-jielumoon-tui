@@ -85,3 +85,7 @@
 2026-08-11 16:56---用户截图暴露工具框右侧边界偶发缺块/多块，且运行态右下角持续闪烁---将边框角点拆为静态 Sakura solid，横线内部保留渐变；统一 frame 宽度取整，修复超宽回退时截掉右 rail 的问题，并覆盖 CJK/Emoji/ANSI、运行 spinner 与两侧角点回归---修改 `src/gradient.ts`、`src/message-borders.ts`、`tests/readmap-renderers.test.ts`、`docs/work.md`；53/53 测试、类型检查、打包检查、0 漏洞审计、RPC get_state 与 diff 空白检查通过。
 
 2026-08-11 18:46---用户确认右边界修复，但运行态超长底边仍整块闪烁---结合 Pi TUI 增量渲染确认运行 spinner 会持续刷新标题，而逐字符 Truecolor 横线会把 180 列边框膨胀到约 3.4–4.0 KB；运行态上下横边改为单段静态 Sakura 色，仅 spinner 动画，完成态继续保留渐变；180 列运行底边降至 564 bytes，并补充低刷写量回归---修改 `src/message-borders.ts`、`tests/readmap-renderers.test.ts`、`docs/work.md`；53/53 测试、类型检查、打包检查、0 漏洞审计、RPC get_state 与 diff 空白检查通过。
+
+2026-08-12---用户反馈 Write 工具卡只有空框且缺少内容形成过程---新增真实参数流驱动的自适应逐字动画、共享调度器、语法高亮弱色行号、末尾 8 个终端显示行、完整展开、创建/覆盖/失败状态，并增加默认开启的 `writeAnimation` 设置；关闭动画仍保留静态尾部预览---修改 `src/readmap-renderers.ts`、`src/footer/types.ts`、`src/index.ts`、`tests/readmap-renderers.test.ts`、`tests/footer-format.test.ts`、`README.md`、`plan/2026-08-12-write-stream-visualization/*`、`docs/work.md`；定向 40/40 测试与类型检查通过。
+
+2026-08-12---双重代码审查发现 Write 彩色模式会先高亮并换行完整超长单行，200k 字符折叠渲染实测耗时 14,865ms；半增量高亮还会丢失第 50 行后的跨行词法状态，共享 timer 未隔离单组件异常---将完整高亮限制为 8KiB，超限回退纯文本并按显示宽度先截尾再换行；删除三套叠加高亮策略、`file_path` 无生产者兼容、单调用计数函数和伪高亮测试；共享节拍逐组件隔离异常并补 200k/并行故障回归---修改 `src/readmap-renderers.ts`、`tests/readmap-renderers.test.ts`、`README.md`、`plan/2026-08-12-write-stream-visualization/*`、`docs/work.md`；200k 折叠渲染降至 5ms，63/63 测试、类型检查、22 文件打包检查、0 漏洞审计与 diff 空白检查通过。

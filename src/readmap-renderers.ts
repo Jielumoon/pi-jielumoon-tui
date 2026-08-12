@@ -1,6 +1,6 @@
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { getLanguageFromPath, highlightCode, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import {
 	type Component,
 	Text,
@@ -26,8 +26,12 @@ const BASH_SHORT_MAX_LINES = 4;
 const BASH_SHORT_MAX_CHARS = 2_000;
 /** 长 bash 折叠态预览行数。 */
 const BASH_COLLAPSED_PREVIEW_LINES = 4;
-/** write 展开时内容预览上限。 */
-const CONTENT_PREVIEW_MAX_LINES = 12;
+/** write 折叠态固定保留的终端显示行。 */
+const WRITE_COLLAPSED_DISPLAY_LINES = 8;
+const WRITE_ANIMATION_INTERVAL_MS = 40;
+const WRITE_ANIMATION_MAX_STEP = 64;
+const WRITE_ANIMATION_CATCHUP_TICKS = 6;
+const WRITE_HIGHLIGHT_MAX_CHARS = 8_192;
 /** edit/write diff 折叠态最多展示的变更行。 */
 const DIFF_COLLAPSED_PREVIEW_LINES = 6;
 /** ls 折叠态最多展示的目录条目。 */
@@ -71,6 +75,16 @@ type RenderOptionsLike = {
 	expanded?: boolean;
 	isPartial?: boolean;
 };
+
+export type ReadmapRendererSettings = {
+	writeAnimation?: boolean;
+};
+
+const DEFAULT_READMAP_RENDERER_SETTINGS: ReadmapRendererSettings = {
+	writeAnimation: true,
+};
+
+const readmapRendererSettings = new WeakMap<object, ReadmapRendererSettings>();
 
 type ToolPhase = "running" | "success" | "error" | "noop";
 
@@ -135,6 +149,7 @@ const REGISTER_TOOL_INTERCEPTOR = Symbol.for("pi-jielumoon.readmap-registerTool"
 type PiWithRegisterInterceptor = ExtensionAPI & {
 	[REGISTER_TOOL_INTERCEPTOR]?: {
 		wrapped: ExtensionAPI["registerTool"];
+		settings: ReadmapRendererSettings;
 	};
 };
 
@@ -446,6 +461,363 @@ function reuseOrCreateWidthAware(
 		return last;
 	}
 	return new WidthAwareTextComponent(renderLines);
+}
+
+
+// ─── write stream ─────────────────────────────────────────────────
+
+type WriteHighlightCache = {
+	content: string;
+	path: string;
+	mode: RenderMode;
+	theme: ThemeLike | undefined;
+	rawLines: string[];
+	highlightedLines: string[] | undefined;
+};
+
+type WriteLineLayout = {
+	prefix: string;
+	continuation: string;
+	segments: string[];
+};
+
+function safeHighlightCode(code: string, language: string): string[] | undefined {
+	try {
+		return highlightCode(code, language);
+	} catch {
+		return undefined;
+	}
+}
+
+function updateWriteHighlightCache(
+	cache: WriteHighlightCache | undefined,
+	content: string,
+	path: string,
+	presentation: RenderPresentation,
+): WriteHighlightCache {
+	if (
+		cache &&
+		cache.content === content &&
+		cache.path === path &&
+		cache.mode === presentation.mode &&
+		cache.theme === presentation.theme
+	) return cache;
+
+	const rawLines = content.split("\n");
+	const language = presentation.mode === "color" && content.length <= WRITE_HIGHLIGHT_MAX_CHARS && path
+		? getLanguageFromPath(path)
+		: undefined;
+	return {
+		content,
+		path,
+		mode: presentation.mode,
+		theme: presentation.theme,
+		rawLines,
+		highlightedLines: language ? safeHighlightCode(content, language) : undefined,
+	};
+}
+
+function commonPrefixBoundary(left: string, right: string): number {
+	const max = Math.min(left.length, right.length);
+	let index = 0;
+	while (index < max && left.charCodeAt(index) === right.charCodeAt(index)) index++;
+	if (index > 0) {
+		const previous = left.charCodeAt(index - 1);
+		if (previous >= 0xd800 && previous <= 0xdbff) index--;
+	}
+	return index;
+}
+
+function advanceCodePoints(value: string, offset: number, count: number): number {
+	let next = Math.max(0, Math.min(offset, value.length));
+	for (let advanced = 0; advanced < count && next < value.length; advanced++) {
+		const codePoint = value.codePointAt(next);
+		next += codePoint !== undefined && codePoint > 0xffff ? 2 : 1;
+	}
+	return next;
+}
+
+/** 纯推进策略，供组件与确定性测试共用。 */
+export function advanceWriteReveal(current: string, target: string): string {
+	if (current === target) return target;
+	let prefixLength = current.length;
+	if (!target.startsWith(current)) prefixLength = commonPrefixBoundary(current, target);
+	const backlog = Math.max(0, target.length - prefixLength);
+	const step = Math.min(
+		WRITE_ANIMATION_MAX_STEP,
+		Math.max(1, Math.ceil(backlog / WRITE_ANIMATION_CATCHUP_TICKS)),
+	);
+	return target.slice(0, advanceCodePoints(target, prefixLength, step));
+}
+
+function writeInput(args: unknown): { path: string; content: string } {
+	const record = asRecord(args);
+	return {
+		path: typeof record?.path === "string" ? record.path : "",
+		content: typeof record?.content === "string" ? record.content : "",
+	};
+}
+
+function trailingTextByWidth(value: string, width: number): string {
+	if (width <= 0 || value.length === 0) return "";
+	const sourceLimit = Math.max(1_024, width * 4);
+	let suffixStart = Math.max(0, value.length - sourceLimit);
+	const firstCode = value.charCodeAt(suffixStart);
+	if (suffixStart > 0 && firstCode >= 0xdc00 && firstCode <= 0xdfff) suffixStart--;
+	const suffix = Array.from(value.slice(suffixStart));
+	let low = 0;
+	let high = suffix.length;
+	while (low < high) {
+		const middle = Math.floor((low + high) / 2);
+		if (visibleWidth(suffix.slice(middle).join("")) > width) low = middle + 1;
+		else high = middle;
+	}
+	return suffix.slice(low).join("");
+}
+
+function writeLineLayout(
+	rawLine: string,
+	highlightedLine: string | undefined,
+	lineNumber: number,
+	lineNumberWidth: number,
+	width: number,
+	presentation: RenderPresentation,
+	cursor: boolean,
+	maxTailRows?: number,
+): WriteLineLayout {
+	const screenReaderPrefix = `line ${lineNumber}: `;
+	const colorPrefix =
+		styleText(presentation, "dim", padStartVisible(String(lineNumber), lineNumberWidth)) +
+		styleText(presentation, "muted", " │ ");
+	const candidate = presentation.mode === "screen-reader" ? screenReaderPrefix : colorPrefix;
+	const prefix = visibleWidth(candidate) < width ? candidate : "";
+	const continuation = " ".repeat(visibleWidth(prefix));
+	const contentWidth = Math.max(1, width - visibleWidth(prefix));
+	let visibleRaw = rawLine;
+	if (highlightedLine === undefined && maxTailRows !== undefined) {
+		const cursorWidth = cursor ? 1 : 0;
+		const totalWidth = visibleWidth(rawLine) + cursorWidth;
+		const rowBudget = contentWidth * maxTailRows;
+		if (totalWidth > rowBudget) {
+			const finalRowWidth = totalWidth % contentWidth || contentWidth;
+			const rawBudget = Math.max(0, finalRowWidth + contentWidth * (maxTailRows - 1) - cursorWidth);
+			visibleRaw = trailingTextByWidth(rawLine, rawBudget);
+		}
+	}
+	const styledLine = highlightedLine ?? styleText(presentation, "toolOutput", visibleRaw);
+	const body = cursor ? `${styledLine}${styleText(presentation, "accent", "▏")}` : styledLine;
+	const wrapped = wrapTextWithAnsi(body, contentWidth);
+	return {
+		prefix,
+		continuation,
+		segments: wrapped.length > 0 ? wrapped : [""],
+	};
+}
+
+function materializeWriteLine(layout: WriteLineLayout, start = 0): string[] {
+	return layout.segments.slice(start).map((segment, index) =>
+		`${index === 0 ? layout.prefix : layout.continuation}${segment}`,
+	);
+}
+
+function renderWritePreviewLines(
+	content: string,
+	path: string,
+	presentation: RenderPresentation,
+	width: number,
+	expanded: boolean,
+	cursor: boolean,
+	cache?: WriteHighlightCache,
+): { lines: string[]; cache: WriteHighlightCache } {
+	const normalizedWidth = normalizeWidth(width);
+	const nextCache = updateWriteHighlightCache(cache, content, path, presentation);
+	if (content.length === 0 && !cursor) {
+		const empty = presentation.mode === "screen-reader"
+			? "empty file"
+			: styleText(presentation, "dim", "empty file");
+		return { lines: [clampLine(empty, normalizedWidth)], cache: nextCache };
+	}
+
+	const lastIndex = nextCache.rawLines.length - 1;
+	const lineNumberWidth = String(Math.max(1, nextCache.rawLines.length)).length;
+	const layoutAt = (index: number, maxTailRows?: number): WriteLineLayout => writeLineLayout(
+		nextCache.rawLines[index] ?? "",
+		nextCache.highlightedLines?.[index],
+		index + 1,
+		lineNumberWidth,
+		normalizedWidth,
+		presentation,
+		cursor && index === lastIndex,
+		maxTailRows,
+	);
+	if (expanded) {
+		const lines = nextCache.rawLines.flatMap((_line, index) => materializeWriteLine(layoutAt(index)));
+		return { lines: clampLines(lines, normalizedWidth), cache: nextCache };
+	}
+
+	const lines: string[] = [];
+	for (let index = lastIndex; index >= 0 && lines.length < WRITE_COLLAPSED_DISPLAY_LINES; index--) {
+		const remaining = WRITE_COLLAPSED_DISPLAY_LINES - lines.length;
+		const layout = layoutAt(index, remaining);
+		const start = Math.max(0, layout.segments.length - remaining);
+		lines.unshift(...materializeWriteLine(layout, start));
+	}
+	return { lines: clampLines(lines.slice(-WRITE_COLLAPSED_DISPLAY_LINES), normalizedWidth), cache: nextCache };
+}
+
+const activeWriteAnimations = new Set<WriteCallComponent>();
+let writeAnimationTimer: ReturnType<typeof setInterval> | undefined;
+
+function stopWriteAnimationTimerIfIdle(): void {
+	if (activeWriteAnimations.size > 0 || writeAnimationTimer === undefined) return;
+	clearInterval(writeAnimationTimer);
+	writeAnimationTimer = undefined;
+}
+
+function scheduleWriteAnimation(component: WriteCallComponent): void {
+	activeWriteAnimations.add(component);
+	if (writeAnimationTimer !== undefined) return;
+	writeAnimationTimer = setInterval(() => {
+		for (const active of [...activeWriteAnimations]) {
+			try {
+				if (!active.advanceAnimation()) activeWriteAnimations.delete(active);
+			} catch {
+				active.stop();
+				activeWriteAnimations.delete(active);
+			}
+		}
+		stopWriteAnimationTimerIfIdle();
+	}, WRITE_ANIMATION_INTERVAL_MS);
+	writeAnimationTimer.unref?.();
+}
+
+function unscheduleWriteAnimation(component: WriteCallComponent): void {
+	activeWriteAnimations.delete(component);
+	stopWriteAnimationTimerIfIdle();
+}
+
+function stopAllWriteAnimations(): void {
+	for (const component of [...activeWriteAnimations]) component.stop();
+	activeWriteAnimations.clear();
+	stopWriteAnimationTimerIfIdle();
+}
+
+export class WriteCallComponent implements Component {
+	private targetContent = "";
+	private revealedContent = "";
+	private path = "";
+	private cwd: string | undefined;
+	private expanded = false;
+	private animationEnabled = false;
+	private showCursor = false;
+	private invalidateRow: (() => void) | undefined;
+	private presentation: RenderPresentation = { mode: "color", diagnostics: false, theme: undefined };
+	private highlightCache: WriteHighlightCache | undefined;
+	private cachedWidth: number | undefined;
+	private cachedLines: string[] | undefined;
+
+	update(
+		args: unknown,
+		presentation: RenderPresentation,
+		context: RenderContextLike,
+		settings: ReadmapRendererSettings,
+	): void {
+		const input = writeInput(args);
+		const nextPath = displayText(input.path, presentation);
+		const nextTarget = displayText(input.content, presentation);
+		if (!nextTarget.startsWith(this.revealedContent)) {
+			this.revealedContent = nextTarget.slice(
+				0,
+				commonPrefixBoundary(this.revealedContent, nextTarget),
+			);
+		}
+		this.targetContent = nextTarget;
+		this.path = nextPath;
+		this.cwd = context.cwd;
+		this.expanded = context.expanded ?? false;
+		this.invalidateRow = context.invalidate;
+		this.presentation = presentation;
+		this.animationEnabled =
+			settings.writeAnimation !== false &&
+			presentation.mode === "color" &&
+			context.argsComplete !== true &&
+			context.isPartial !== false;
+		this.showCursor = this.animationEnabled;
+
+		if (!this.animationEnabled) {
+			this.revealedContent = this.targetContent;
+			unscheduleWriteAnimation(this);
+		} else if (this.revealedContent !== this.targetContent) {
+			scheduleWriteAnimation(this);
+		} else {
+			unscheduleWriteAnimation(this);
+		}
+		this.invalidate();
+	}
+
+	advanceAnimation(): boolean {
+		if (!this.animationEnabled || this.revealedContent === this.targetContent) return false;
+		const next = advanceWriteReveal(this.revealedContent, this.targetContent);
+		if (next === this.revealedContent) return false;
+		this.revealedContent = next;
+		this.cachedWidth = undefined;
+		this.cachedLines = undefined;
+		this.invalidateRow?.();
+		return this.animationEnabled && this.revealedContent !== this.targetContent;
+	}
+
+	stop(): void {
+		this.animationEnabled = false;
+		this.showCursor = false;
+		unscheduleWriteAnimation(this);
+	}
+
+	invalidate(): void {
+		this.cachedWidth = undefined;
+		this.cachedLines = undefined;
+	}
+
+	render(width: number): string[] {
+		const normalizedWidth = normalizeWidth(width);
+		if (this.cachedLines && this.cachedWidth === normalizedWidth) return this.cachedLines;
+		const preview = renderWritePreviewLines(
+			this.revealedContent,
+			this.path,
+			this.presentation,
+			normalizedWidth,
+			this.expanded,
+			this.showCursor,
+			this.highlightCache,
+		);
+		this.highlightCache = preview.cache;
+		const count = this.revealedContent.length === 0 ? 0 : preview.cache.rawLines.length;
+		const header = renderToolHeader(
+			"write",
+			{ path: this.path },
+			this.presentation,
+			{ cwd: this.cwd, expanded: this.expanded },
+			{
+				phase: "running",
+				meta: [`${count} ${count === 1 ? "line" : "lines"}`],
+				expandable: !this.expanded && this.revealedContent.length > 0,
+			},
+		);
+		this.cachedWidth = normalizedWidth;
+		this.cachedLines = clampLines([header, ...preview.lines], normalizedWidth);
+		return this.cachedLines;
+	}
+}
+
+function reuseOrCreateWriteCall(
+	last: Component | undefined,
+	args: unknown,
+	presentation: RenderPresentation,
+	context: RenderContextLike,
+	settings: ReadmapRendererSettings,
+): WriteCallComponent {
+	const component = last instanceof WriteCallComponent ? last : new WriteCallComponent();
+	component.update(args, presentation, context, settings);
+	return component;
 }
 
 // ─── diff body ───────────────────────────────────────────────────
@@ -856,9 +1228,17 @@ function renderToolCall(
 	args: unknown,
 	theme: ThemeLike | undefined,
 	context: RenderContextLike,
+	settings: ReadmapRendererSettings = DEFAULT_READMAP_RENDERER_SETTINGS,
 ): Component {
-	if (context.isPartial === false) return reuseOrCreateText(context.lastComponent, "");
 	const presentation = resolvePresentation(theme);
+	if (name === "write") {
+		if (context.isPartial === false) {
+			if (context.lastComponent instanceof WriteCallComponent) context.lastComponent.stop();
+			return new Text("", 0, 0);
+		}
+		return reuseOrCreateWriteCall(context.lastComponent, args, presentation, context, settings);
+	}
+	if (context.isPartial === false) return reuseOrCreateText(context.lastComponent, "");
 	return reuseOrCreateText(
 		context.lastComponent,
 		renderToolHeader(name, args, presentation, context, { phase: "running" }),
@@ -1013,32 +1393,58 @@ function renderWriteResult(
 	const ptc = asRecord(details.ptcValue);
 	const expanded = isExpanded(options, context);
 	const isError = Boolean(context.isError || result.isError || ptc?.ok === false);
-	if (isError) return renderToolError("write", body, options, p, context);
+	const warnings = warningBadges(ptc?.warnings ?? details.warnings);
+	const inputRecord = asRecord(context.args);
+	const input = writeInput(context.args);
+	const hasArgsContent = typeof inputRecord?.content === "string";
+	const ptcLines = Array.isArray(ptc?.lines) ? ptc.lines : [];
+	const fallbackContent = ptcLines.map((item) => {
+		const row = asRecord(item);
+		const raw = typeof row?.raw === "string" ? row.raw : typeof item === "string" ? item : "";
+		const hashline = raw.match(HASHLINE_RE);
+		return hashline?.[3] ?? raw;
+	}).join("\n");
+	const content = displayText(hasArgsContent ? input.content : fallbackContent, p);
+	const path = displayText(input.path, p);
+	const lineCount = content.length === 0 ? 0 : content.split("\n").length;
+	const lineMeta = `${lineCount} ${lineCount === 1 ? "line" : "lines"}`;
+
+	const renderPreview = (header: string, errorLines: string[] = []): Component => {
+		let cache: WriteHighlightCache | undefined;
+		return reuseOrCreateWidthAware(context.lastComponent, (width) => {
+			const preview = renderWritePreviewLines(content, path, p, width, expanded, false, cache);
+			cache = preview.cache;
+			return [
+				header,
+				...errorLines.flatMap((line) => wrapWithHangingIndent(
+					p.mode === "screen-reader" ? "error: " : styleText(p, "error", "┃ "),
+					styleText(p, "toolOutput", line),
+					width,
+				)),
+				...preview.lines,
+			];
+		});
+	};
+
+	if (isError) {
+		const [first = "write failed", ...rest] = body.split("\n");
+		const visibleErrors = expanded ? rest : rest.slice(-2);
+		const header = renderToolHeader("write", context.args, p, context, {
+			phase: "error",
+			meta: [first || "write failed", "not written", lineMeta, ...warnings],
+			expandable: !expanded && (content.length > 0 || rest.length > visibleErrors.length),
+		});
+		return renderPreview(header, visibleErrors);
+	}
 
 	const state = details.writeState === "overwritten" ? "overwrite" : "create";
-	const warnings = warningBadges(ptc?.warnings ?? details.warnings);
 	if (state === "create") {
-		const ptcLines = Array.isArray(ptc?.lines) ? ptc.lines : [];
-		const lineCount = ptcLines.length;
-		const hasContent = lineCount > 0;
 		const header = renderToolHeader("create", context.args, p, context, {
 			phase: "success",
-			meta: [...(hasContent ? [`${lineCount} ${lineCount === 1 ? "line" : "lines"}`] : []), ...warnings],
-			expandable: hasContent && !expanded,
+			meta: [lineMeta, ...warnings],
+			expandable: content.length > 0 && !expanded,
 		});
-		if (!expanded || !hasContent) return reuseOrCreateText(context.lastComponent, header);
-
-		const rawLines = ptcLines.flatMap((item) => {
-			const row = asRecord(item);
-			if (typeof row?.raw === "string") return [displayText(row.raw, p)];
-			return typeof item === "string" ? [displayText(item, p)] : [];
-		});
-		const shown = rawLines.slice(0, CONTENT_PREVIEW_MAX_LINES);
-		return reuseOrCreateWidthAware(context.lastComponent, (width) => [
-			header,
-			...wrapHashlines(shown.join("\n"), width, p),
-			...(rawLines.length > shown.length ? [collapsedHint(shown.length, lineCount, "lines", false, p)] : []),
-		]);
+		return renderPreview(header);
 	}
 
 	const diffData = isDiffData(details.diffData)
@@ -1048,9 +1454,10 @@ function renderWriteResult(
 			: undefined;
 	const header = renderToolHeader("overwrite", context.args, p, context, {
 		phase: "success",
-		meta: [...(diffData ? [`+${diffData.stats.added} −${diffData.stats.removed}`] : []), ...warnings],
+		meta: [...(diffData ? [`+${diffData.stats.added} −${diffData.stats.removed}`] : [lineMeta]), ...warnings],
+		expandable: !diffData && content.length > 0 && !expanded,
 	});
-	if (!diffData) return reuseOrCreateText(context.lastComponent, header);
+	if (!diffData) return renderPreview(header);
 	return reuseOrCreateDiff(context.lastComponent, {
 		prefixLines: [header],
 		diffData,
@@ -1242,11 +1649,15 @@ function safeCallOriginal(
 }
 
 /** 原地替换目标工具的 renderer；返回是否完成 patch。 */
-export function patchReadmapTool(tool: unknown): boolean {
+export function patchReadmapTool(
+	tool: unknown,
+	settings: ReadmapRendererSettings = DEFAULT_READMAP_RENDERER_SETTINGS,
+): boolean {
 	if (!isObject(tool)) return false;
 	const target = tool as PatchableTool;
 	const name = toolNameOf(target);
 	if (!name || !TARGET_TOOL_NAMES.has(name)) return false;
+	readmapRendererSettings.set(target, settings);
 	if (READMAP_RENDERER_MARK in target && target[READMAP_RENDERER_MARK] === true) {
 		return false;
 	}
@@ -1259,7 +1670,13 @@ export function patchReadmapTool(tool: unknown): boolean {
 	const renderCall = (args: unknown, theme: unknown, context: RenderContextLike = {}) => {
 		const t = asThemeLike(theme);
 		try {
-			return renderToolCall(name, args, t, context);
+			return renderToolCall(
+				name,
+				args,
+				t,
+				context,
+				readmapRendererSettings.get(target) ?? DEFAULT_READMAP_RENDERER_SETTINGS,
+			);
 		} catch {
 			return (
 				safeCallOriginal(originals.renderCall, [args, theme, context])
@@ -1310,7 +1727,10 @@ export function patchReadmapTool(tool: unknown): boolean {
 }
 
 /** 扫描 event / global payload 中的工具对象。 */
-export function patchToolPayload(payload: unknown): string[] {
+export function patchToolPayload(
+	payload: unknown,
+	settings: ReadmapRendererSettings = DEFAULT_READMAP_RENDERER_SETTINGS,
+): string[] {
 	const patched: string[] = [];
 	if (!payload || typeof payload !== "object") return patched;
 	for (const [key, value] of Object.entries(payload as Record<string, unknown>)) {
@@ -1321,33 +1741,39 @@ export function patchToolPayload(payload: unknown): string[] {
 			// payload key is authoritative when tool.name missing
 			(tool as PatchableTool).name = name;
 		}
-		if (patchReadmapTool(tool)) patched.push(name);
+		if (patchReadmapTool(tool, settings)) patched.push(name);
 	}
 	return patched;
 }
 
-function patchGlobalExecutors(): string[] {
+function patchGlobalExecutors(settings: ReadmapRendererSettings): string[] {
 	const global = globalThis as GlobalWithHashline;
-	return patchToolPayload(global.__hashlineToolExecutors);
+	return patchToolPayload(global.__hashlineToolExecutors, settings);
 }
 
 /** 观察后续 registerTool（含 bash）；幂等，扩展生命周期内保持。 */
-function installRegisterToolObserver(pi: ExtensionAPI): void {
+function installRegisterToolObserver(pi: ExtensionAPI, settings: ReadmapRendererSettings): void {
 	const tagged = pi as PiWithRegisterInterceptor;
-	if (tagged[REGISTER_TOOL_INTERCEPTOR]?.wrapped === pi.registerTool) return;
+	const existing = tagged[REGISTER_TOOL_INTERCEPTOR];
+	if (existing?.wrapped === pi.registerTool) {
+		existing.settings = settings;
+		return;
+	}
 
 	// 始终包当前函数：其它扩展重载后再 /reload，不会跳过新拦截器。
 	const original = pi.registerTool.bind(pi);
+	const interceptor = { settings, wrapped: undefined as unknown as ExtensionAPI["registerTool"] };
 	const wrapped: ExtensionAPI["registerTool"] = ((tool) => {
 		original(tool);
 		try {
-			patchReadmapTool(tool);
+			patchReadmapTool(tool, interceptor.settings);
 		} catch {
 			// renderer patch 失败不能影响工具注册
 		}
 	}) as ExtensionAPI["registerTool"];
+	interceptor.wrapped = wrapped;
 	pi.registerTool = wrapped;
-	tagged[REGISTER_TOOL_INTERCEPTOR] = { wrapped };
+	tagged[REGISTER_TOOL_INTERCEPTOR] = interceptor;
 }
 
 /**
@@ -1355,10 +1781,13 @@ function installRegisterToolObserver(pi: ExtensionAPI): void {
  * event/global 路径可靠覆盖 read/edit/write；bash 仅在本扩展先于它注册时可接管。
  * 只替换 renderCall/renderResult；execute 与参数 schema 保持原引用。
  */
-export default function installReadmapRenderers(pi: ExtensionAPI): void {
+export default function installReadmapRenderers(
+	pi: ExtensionAPI,
+	settings: ReadmapRendererSettings = DEFAULT_READMAP_RENDERER_SETTINGS,
+): void {
 	const boot = () => {
 		try {
-			patchGlobalExecutors();
+			patchGlobalExecutors(settings);
 		} catch {
 			// quiet degrade
 		}
@@ -1367,7 +1796,7 @@ export default function installReadmapRenderers(pi: ExtensionAPI): void {
 	try {
 		pi.events.on("hashline:tool-executors", (payload) => {
 			try {
-				patchToolPayload(payload);
+				patchToolPayload(payload, settings);
 			} catch {
 				// quiet degrade
 			}
@@ -1377,7 +1806,7 @@ export default function installReadmapRenderers(pi: ExtensionAPI): void {
 	}
 
 	try {
-		installRegisterToolObserver(pi);
+		installRegisterToolObserver(pi, settings);
 	} catch {
 		// registerTool not writable
 	}
@@ -1385,4 +1814,5 @@ export default function installReadmapRenderers(pi: ExtensionAPI): void {
 	boot();
 	pi.on("session_start", boot);
 	pi.on("before_agent_start", boot);
+	pi.on("session_shutdown", stopAllWriteAnimations);
 }

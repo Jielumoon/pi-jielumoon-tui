@@ -19,5 +19,5 @@ export default function jielumoonTui(pi: ExtensionAPI): void {
 	installMessageBorders(pi, footerSettings);
 	installWorking(pi);
 	installSakuraEditor(pi);
-	installReadmapRenderers(pi);
+	installReadmapRenderers(pi, footerSettings);
 }

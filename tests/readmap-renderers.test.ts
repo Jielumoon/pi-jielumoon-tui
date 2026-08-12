@@ -4,6 +4,7 @@ import { BashExecutionComponent, ToolExecutionComponent, UserMessageComponent, t
 import { visibleWidth } from "@earendil-works/pi-tui";
 import installReadmapRenderers, {
 	DiffBodyComponent,
+	advanceWriteReveal,
 	READMAP_RENDERER_MARK,
 	clampLine,
 	patchReadmapTool,
@@ -1025,7 +1026,201 @@ test("edit no-op and error paths", () => {
 	assert.match(stripAnsi(failed.render(80).join("\n")), /anchor mismatch/);
 });
 
-test("write created stays summary when collapsed; expanded caps content lines", () => {
+test("write reveal adapts without splitting Unicode code points", () => {
+	assert.equal(advanceWriteReveal("", "abc"), "a");
+	assert.equal(advanceWriteReveal("", "😀x"), "😀");
+	assert.equal(advanceWriteReveal("abc", "ax"), "ax");
+	assert.equal(advanceWriteReveal("", "x".repeat(1_000)).length, 64);
+});
+
+test("write call animates incrementally and flushes when args complete", () => {
+	const tool = makeTool("write");
+	patchReadmapTool(tool, { writeAnimation: true });
+	let invalidations = 0;
+	const component = tool.renderCall?.(
+		{ path: "src/live.ts", content: "abc" },
+		theme,
+		{
+			argsComplete: false,
+			isPartial: true,
+			invalidate: () => invalidations++,
+		},
+	) as {
+		render: (width: number) => string[];
+		advanceAnimation: () => boolean;
+		stop: () => void;
+	};
+	const initial = stripAnsi(component.render(80).join("\n"));
+	assert.match(initial, /Write.*live\.ts.*0 lines/);
+	assert.match(initial, /▏/);
+	assert.doesNotMatch(initial, /abc/);
+
+	assert.equal(component.advanceAnimation(), true);
+	assert.equal(invalidations, 1);
+	assert.match(stripAnsi(component.render(80).join("\n")), /a▏/);
+
+	const complete = tool.renderCall?.(
+		{ path: "src/live.ts", content: "abc" },
+		theme,
+		{ argsComplete: true, isPartial: true, lastComponent: component as never },
+	) as { render: (width: number) => string[] };
+	const completeText = stripAnsi(complete.render(80).join("\n"));
+	assert.match(completeText, /abc/);
+	assert.doesNotMatch(completeText, /▏/);
+	component.stop();
+});
+
+
+test("parallel write calls keep independent animation state", () => {
+	const tool = makeTool("write");
+	patchReadmapTool(tool, { writeAnimation: true });
+	const left = tool.renderCall?.(
+		{ path: "left.ts", content: "left" },
+		theme,
+		{ argsComplete: false, isPartial: true },
+	) as { render: (width: number) => string[]; advanceAnimation: () => boolean; stop: () => void };
+	const right = tool.renderCall?.(
+		{ path: "right.ts", content: "right" },
+		theme,
+		{ argsComplete: false, isPartial: true },
+	) as { render: (width: number) => string[]; advanceAnimation: () => boolean; stop: () => void };
+
+	assert.notEqual(left, right);
+	left.advanceAnimation();
+	right.advanceAnimation();
+	assert.match(stripAnsi(left.render(80).join("\n")), /l▏/);
+	assert.match(stripAnsi(right.render(80).join("\n")), /r▏/);
+	assert.doesNotMatch(stripAnsi(left.render(80).join("\n")), /right/);
+	assert.doesNotMatch(stripAnsi(right.render(80).join("\n")), /left/);
+	left.stop();
+	right.stop();
+});
+
+
+test("shared write timer isolates a failing component", () => {
+	const originalSetInterval = globalThis.setInterval;
+	const originalClearInterval = globalThis.clearInterval;
+	let tick: (() => void) | undefined;
+	globalThis.setInterval = ((handler: (...args: unknown[]) => void) => {
+		tick = () => handler();
+		return { unref() {} } as unknown as ReturnType<typeof setInterval>;
+	}) as typeof setInterval;
+	globalThis.clearInterval = (() => undefined) as typeof clearInterval;
+
+	const tool = makeTool("write");
+	patchReadmapTool(tool, { writeAnimation: true });
+	let rightInvalidations = 0;
+	const left = tool.renderCall?.(
+		{ path: "left.ts", content: "left" },
+		theme,
+		{ argsComplete: false, isPartial: true, invalidate: () => { throw new Error("detached row"); } },
+	) as { render: (width: number) => string[]; stop: () => void };
+	const right = tool.renderCall?.(
+		{ path: "right.ts", content: "right" },
+		theme,
+		{ argsComplete: false, isPartial: true, invalidate: () => rightInvalidations++ },
+	) as { render: (width: number) => string[]; stop: () => void };
+
+	try {
+		assert.ok(tick);
+		assert.doesNotThrow(() => tick?.());
+		assert.equal(rightInvalidations, 1);
+		assert.doesNotMatch(stripAnsi(left.render(80).join("\n")), /▏/);
+		assert.match(stripAnsi(right.render(80).join("\n")), /r▏/);
+	} finally {
+		left.stop();
+		right.stop();
+		globalThis.setInterval = originalSetInterval;
+		globalThis.clearInterval = originalClearInterval;
+	}
+});
+
+test("write bounds colored rendering for a 200k single line", () => {
+	const tool = makeTool("write");
+	patchReadmapTool(tool, { writeAnimation: false });
+	const component = tool.renderCall?.(
+		{ path: "src/huge.ts", content: `START_MARKER${"x".repeat(200_000)}END_MARKER` },
+		theme,
+		{ argsComplete: true, isPartial: true, expanded: false },
+	) as { render: (width: number) => string[] };
+	const start = performance.now();
+	const lines = component.render(80);
+	const elapsedMs = performance.now() - start;
+	const text = stripAnsi(lines.join("\n"));
+
+	assert.equal(lines.length, 9);
+	assertNoOverflow(lines, 80);
+	assert.match(text, /END_MARKER/);
+	assert.doesNotMatch(text, /START_MARKER/);
+	assert.ok(elapsedMs < 2_000, `200k folded write took ${Math.round(elapsedMs)}ms`);
+});
+
+test("write call stays visible without animation and keeps eight terminal rows", () => {
+	const tool = makeTool("write");
+	patchReadmapTool(tool, { writeAnimation: false });
+	const content = Array.from({ length: 12 }, (_, index) => `line-${index + 1}`).join("\n");
+	const collapsed = tool.renderCall?.(
+		{ path: "src/static.ts", content },
+		theme,
+		{ argsComplete: false, isPartial: true, expanded: false },
+	) as { render: (width: number) => string[] };
+	const collapsedText = stripAnsi(collapsed.render(80).join("\n"));
+	const numbered = collapsedText.split("\n").filter((line) => /^\s*\d+\s+│/.test(line));
+	assert.equal(numbered.length, 8);
+	assert.match(collapsedText, /5 │ line-5/);
+	assert.match(collapsedText, /12 │ line-12/);
+	assert.doesNotMatch(collapsedText, /1 │ line-1(?:\n|$)/);
+	assert.doesNotMatch(collapsedText, /▏/);
+	assert.match(collapsedText, /Ctrl\+O/);
+
+	const expanded = tool.renderCall?.(
+		{ path: "src/static.ts", content },
+		theme,
+		{ argsComplete: false, isPartial: true, expanded: true, lastComponent: collapsed as never },
+	) as { render: (width: number) => string[] };
+	const expandedText = stripAnsi(expanded.render(80).join("\n"));
+	assert.match(expandedText, /1 │ line-1/);
+	assert.match(expandedText, /12 │ line-12/);
+
+	const longLine = tool.renderCall?.(
+		{ path: "src/long.ts", content: "界".repeat(100) },
+		theme,
+		{ argsComplete: true, isPartial: true, expanded: false },
+	) as { render: (width: number) => string[] };
+	const longRows = longLine.render(18);
+	assert.equal(longRows.length, 9);
+	assertNoOverflow(longRows, 18);
+});
+
+test("write screen-reader mode is static and labels source lines", () => {
+	const tool = makeTool("write");
+	patchReadmapTool(tool, { writeAnimation: true });
+	const component = withEnv("PI_READMAP_RENDER_MODE", "screen-reader", () => tool.renderCall?.(
+		{ path: "notes.txt", content: "first\nsecond" },
+		theme,
+		{ argsComplete: false, isPartial: true },
+	)) as { render: (width: number) => string[] };
+	const text = component.render(80).join("\n");
+	assert.match(text, /line 1: first/);
+	assert.match(text, /line 2: second/);
+	assert.doesNotMatch(text, /▏/);
+});
+
+
+test("write plain mode is static without a cursor", () => {
+	const tool = makeTool("write");
+	patchReadmapTool(tool, { writeAnimation: true });
+	const plain = withEnv("PI_READMAP_RENDER_MODE", "plain", () => tool.renderCall?.(
+		{ path: "notes.txt", content: "plain text" },
+		theme,
+		{ argsComplete: false, isPartial: true },
+	)) as { render: (width: number) => string[] };
+	const plainText = plain.render(80).join("\n");
+	assert.match(plainText, /plain text/);
+	assert.doesNotMatch(plainText, /▏|\x1b\[/);
+});
+
+test("write create keeps final tail, expands fully, and overwrite keeps diff", () => {
 	const tool = makeTool("write");
 	patchReadmapTool(tool);
 	const manyLines = Array.from({ length: 40 }, (_, i) => ({
@@ -1045,9 +1240,14 @@ test("write created stays summary when collapsed; expanded caps content lines", 
 		{ expanded: false },
 	) as { render: (w: number) => string[] };
 	const collapsedText = stripAnsi(collapsed.render(80).join("\n"));
+	const collapsedRows = collapsedText.split("\n").filter((line) => /^\s*\d+\s+│/.test(line));
 	assert.match(collapsedText, /Create/);
 	assert.match(collapsedText, /40 lines/);
+	assert.equal(collapsedRows.length, 8);
+	assert.match(collapsedText, /33 │ line-32/);
+	assert.match(collapsedText, /40 │ line-39/);
 	assert.doesNotMatch(collapsedText, /line-0/);
+	assert.doesNotMatch(collapsedText, /\d+:aaa\|/);
 
 	const created = tool.renderResult?.(
 		{
@@ -1063,12 +1263,20 @@ test("write created stays summary when collapsed; expanded caps content lines", 
 	) as { render: (w: number) => string[] };
 	const createdText = stripAnsi(created.render(80).join("\n"));
 	assert.match(createdText, /Create/);
-	assert.match(createdText, /line-0/);
-	assert.match(createdText, /28 more lines/);
-	assert.doesNotMatch(createdText, /line-39/);
-	// 空行也占预览配额，不能因为 filter(Boolean) 让第 13 行漏进来。
-	assert.doesNotMatch(createdText, /line-12/);
+	assert.match(createdText, /1 │ line-0/);
+	assert.match(createdText, /40 │ line-39/);
+	assert.match(createdText, /\n\s*2 │\s*\n/);
+	assert.doesNotMatch(createdText, /more lines/);
+	assert.doesNotMatch(createdText, /\d+:aaa\|/);
 	assert.doesNotMatch(createdText, /▌\+/);
+
+	const empty = tool.renderResult?.(
+		{ content: [{ type: "text", text: "ok" }], details: { writeState: "created" } },
+		{ expanded: false },
+		theme,
+		{ args: { path: "empty.txt", content: "" }, expanded: false },
+	) as { render: (width: number) => string[] };
+	assert.match(stripAnsi(empty.render(80).join("\n")), /empty file/);
 
 	const overwritten = tool.renderResult?.(
 		{
@@ -1092,8 +1300,30 @@ test("write created stays summary when collapsed; expanded caps content lines", 
 	const overText = stripAnsi(overwritten.render(100).join("\n"));
 	assert.match(overText, /Overwrite/);
 	assert.doesNotMatch(overText, /↳ diff/);
-	// 折叠态也有少量 diff 预览
 	assert.match(overText, /▌/);
+});
+
+test("write failure keeps the final eight rows and marks content as not written", () => {
+	const tool = makeTool("write");
+	patchReadmapTool(tool);
+	const content = Array.from({ length: 12 }, (_, index) => `failed-${index + 1}`).join("\n");
+	const failed = tool.renderResult?.(
+		{ content: [{ type: "text", text: "permission denied" }], isError: true },
+		{ expanded: false },
+		theme,
+		{
+			args: { path: "src/failed.ts", content },
+			expanded: false,
+			isError: true,
+		},
+	) as { render: (width: number) => string[] };
+	const text = stripAnsi(failed.render(80).join("\n"));
+	const rows = text.split("\n").filter((line) => /^\s*\d+\s+│/.test(line));
+	assert.match(text, /permission denied/);
+	assert.match(text, /not written/);
+	assert.equal(rows.length, 8);
+	assert.match(text, /12 │ failed-12/);
+	assert.doesNotMatch(text, /1 │ failed-1(?:\n|$)/);
 });
 
 test("bash short output shows body when collapsed; long output previews", () => {

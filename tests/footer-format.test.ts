@@ -151,6 +151,14 @@ test("tool background setting defaults off and exposes the command alias", () =>
 	assert.deepEqual(definition.aliases, ["tool-bg"]);
 });
 
+
+test("write animation defaults on and exposes only its canonical alias", () => {
+	const definition = FOOTER_SETTING_DEFINITIONS.find((item) => item.key === "writeAnimation");
+	assert.ok(definition);
+	assert.equal(DEFAULT_FOOTER_SETTINGS.writeAnimation, true);
+	assert.deepEqual(definition.aliases, ["write-animation"]);
+});
+
 test("footer omits an empty identity row when the selected model is unavailable", () => {
 	const settings = structuredClone(DEFAULT_FOOTER_SETTINGS);
 	Object.assign(settings, {
