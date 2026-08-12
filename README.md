@@ -27,7 +27,7 @@
 - 用户消息使用无标题 Sakura 完整圆框，粉色粗 `▌` rail 位于框内，和工具状态卡保持明确区别
 - read 保持无框并左缩进 2 格；其它工具把唯一 canonical header 嵌入 Sakura 上边框，溢出时以 `…` 收束并始终保留右侧封口横线
 - 工具框默认剥离 Pi 默认背景色；可通过“工具状态底色”开关恢复按运行状态变化的主题底色，Read 和图片旁路保持无底色
-- Read 默认单行；Edit/Overwrite 按需预览 diff；Write 真实跟随参数流自适应逐字显示，默认保留末尾 8 个终端行，常规内容自动语法高亮、超大内容安全回退纯文本；Bash 成功显示尾部摘要、失败保留错误 rail；Ctrl+O 展开完整内容
+- Read 默认单行；Edit 流式期间逐字展示伪 diff（操作标签 + 红减绿加），完成后换真实 diff；Write 真实跟随参数流自适应逐字显示，默认保留末尾 8 个终端行，常规内容自动语法高亮、超大内容安全回退纯文本；Bash 成功显示尾部摘要、失败保留错误 rail；Ctrl+O 展开完整内容
 - 助手正文与 Thought trail 保持干净的无包围框布局
 
 ### Sakura 输入框
@@ -86,6 +86,8 @@ pi -e /home/jielumoon/opt/projects/pi-tui/pi-jielumoon
 /jielumoon-tui tool-bg off         隐藏有框工具的状态底色
 /jielumoon-tui write-animation on   开启 Write 自适应逐字动画
 /jielumoon-tui write-animation off 关闭动画但保留末尾 8 行预览
+/jielumoon-tui edit-animation on    开启 Edit 伪 diff 逐字动画
+/jielumoon-tui edit-animation off  关闭动画但保留静态伪 diff 预览
 /jielumoon-tui reset                 恢复默认显示项
 /jielumoon-tui planning on           显示右侧计划阶段状态
 /jielumoon-tui planning off          隐藏右侧计划阶段状态
@@ -108,6 +110,8 @@ pi -e /home/jielumoon/opt/projects/pi-tui/pi-jielumoon
 也可直接在该 JSON 中设置 `"toolBackground": true`。
 
 `write-animation` 默认开启，仅控制逐字过渡和运行光标；关闭后 Write 仍实时展示末尾 8 个终端显示行。8 KiB 以内的可识别文件自动语法高亮，超过上限时回退纯文本尾部，避免高亮器冻结 TUI。也可在同一 JSON 中设置 `"writeAnimation": false`。plain、screen-reader 与 `NO_COLOR` 模式始终使用静态预览。
+
+`edit-animation` 默认开启：Edit 参数流式期间按操作展示伪 diff——`┄` 操作标签（含 `LINE:HASH` 锚点）、红 `▌-` 旧文本、绿 `▌+` 新文本，逐字揭示并跟随光标，折叠态保留尾部 8 行；工具完成后由真实 diff 替换。流式期间没有真实行号，红绿行只反映参数内容。也可在同一 JSON 中设置 `"editAnimation": false` 保留静态伪 diff 预览。
 
 设置会保存到 Pi agent 目录的 `pi-vibrant-footer.json`，用于兼容原版 Footer 配置。默认路径通常是：
 

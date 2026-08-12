@@ -1,4 +1,4 @@
-/** Write 参数流的自适应逐字动画、语法高亮尾部预览与共享调度器。 */
+/** Write 参数流的自适应逐字动画与语法高亮尾部预览；动画推进与调度在 stream-animation。 */
 
 import { getLanguageFromPath, highlightCode } from "@earendil-works/pi-coding-agent";
 import { visibleWidth, wrapTextWithAnsi, type Component } from "@earendil-works/pi-tui";
@@ -15,13 +15,17 @@ import {
 	type RenderPresentation,
 	type ThemeLike,
 } from "./presentation.ts";
+import {
+	advanceStreamReveal,
+	commonPrefixBoundary,
+	scheduleStreamAnimation,
+	trailingTextByWidth,
+	unscheduleStreamAnimation,
+} from "./stream-animation.ts";
 import type { ReadmapRendererSettings, RenderContextLike } from "./types.ts";
 
 /** write 折叠态固定保留的终端显示行。 */
 export const WRITE_COLLAPSED_DISPLAY_LINES = 8;
-const WRITE_ANIMATION_INTERVAL_MS = 40;
-const WRITE_ANIMATION_MAX_STEP = 64;
-const WRITE_ANIMATION_CATCHUP_TICKS = 6;
 const WRITE_HIGHLIGHT_MAX_CHARS = 8_192;
 
 export type WriteHighlightCache = {
@@ -75,62 +79,12 @@ function updateWriteHighlightCache(
 	};
 }
 
-function commonPrefixBoundary(left: string, right: string): number {
-	const max = Math.min(left.length, right.length);
-	let index = 0;
-	while (index < max && left.charCodeAt(index) === right.charCodeAt(index)) index++;
-	if (index > 0) {
-		const previous = left.charCodeAt(index - 1);
-		if (previous >= 0xd800 && previous <= 0xdbff) index--;
-	}
-	return index;
-}
-
-function advanceCodePoints(value: string, offset: number, count: number): number {
-	let next = Math.max(0, Math.min(offset, value.length));
-	for (let advanced = 0; advanced < count && next < value.length; advanced++) {
-		const codePoint = value.codePointAt(next);
-		next += codePoint !== undefined && codePoint > 0xffff ? 2 : 1;
-	}
-	return next;
-}
-
-/** 纯推进策略，供组件与确定性测试共用。 */
-export function advanceWriteReveal(current: string, target: string): string {
-	if (current === target) return target;
-	let prefixLength = current.length;
-	if (!target.startsWith(current)) prefixLength = commonPrefixBoundary(current, target);
-	const backlog = Math.max(0, target.length - prefixLength);
-	const step = Math.min(
-		WRITE_ANIMATION_MAX_STEP,
-		Math.max(1, Math.ceil(backlog / WRITE_ANIMATION_CATCHUP_TICKS)),
-	);
-	return target.slice(0, advanceCodePoints(target, prefixLength, step));
-}
-
 export function writeInput(args: unknown): { path: string; content: string } {
 	const record = asRecord(args);
 	return {
 		path: typeof record?.path === "string" ? record.path : "",
 		content: typeof record?.content === "string" ? record.content : "",
 	};
-}
-
-function trailingTextByWidth(value: string, width: number): string {
-	if (width <= 0 || value.length === 0) return "";
-	const sourceLimit = Math.max(1_024, width * 4);
-	let suffixStart = Math.max(0, value.length - sourceLimit);
-	const firstCode = value.charCodeAt(suffixStart);
-	if (suffixStart > 0 && firstCode >= 0xdc00 && firstCode <= 0xdfff) suffixStart--;
-	const suffix = Array.from(value.slice(suffixStart));
-	let low = 0;
-	let high = suffix.length;
-	while (low < high) {
-		const middle = Math.floor((low + high) / 2);
-		if (visibleWidth(suffix.slice(middle).join("")) > width) low = middle + 1;
-		else high = middle;
-	}
-	return suffix.slice(low).join("");
 }
 
 function writeLineLayout(
@@ -223,43 +177,6 @@ export function renderWritePreviewLines(
 	return { lines: clampLines(lines.slice(-WRITE_COLLAPSED_DISPLAY_LINES), normalizedWidth), cache: nextCache };
 }
 
-const activeWriteAnimations = new Set<WriteCallComponent>();
-let writeAnimationTimer: ReturnType<typeof setInterval> | undefined;
-
-function stopWriteAnimationTimerIfIdle(): void {
-	if (activeWriteAnimations.size > 0 || writeAnimationTimer === undefined) return;
-	clearInterval(writeAnimationTimer);
-	writeAnimationTimer = undefined;
-}
-
-function scheduleWriteAnimation(component: WriteCallComponent): void {
-	activeWriteAnimations.add(component);
-	if (writeAnimationTimer !== undefined) return;
-	writeAnimationTimer = setInterval(() => {
-		for (const active of [...activeWriteAnimations]) {
-			try {
-				if (!active.advanceAnimation()) activeWriteAnimations.delete(active);
-			} catch {
-				active.stop();
-				activeWriteAnimations.delete(active);
-			}
-		}
-		stopWriteAnimationTimerIfIdle();
-	}, WRITE_ANIMATION_INTERVAL_MS);
-	writeAnimationTimer.unref?.();
-}
-
-function unscheduleWriteAnimation(component: WriteCallComponent): void {
-	activeWriteAnimations.delete(component);
-	stopWriteAnimationTimerIfIdle();
-}
-
-export function stopAllWriteAnimations(): void {
-	for (const component of [...activeWriteAnimations]) component.stop();
-	activeWriteAnimations.clear();
-	stopWriteAnimationTimerIfIdle();
-}
-
 export class WriteCallComponent implements Component {
 	private targetContent = "";
 	private revealedContent = "";
@@ -304,18 +221,18 @@ export class WriteCallComponent implements Component {
 
 		if (!this.animationEnabled) {
 			this.revealedContent = this.targetContent;
-			unscheduleWriteAnimation(this);
+			unscheduleStreamAnimation(this);
 		} else if (this.revealedContent !== this.targetContent) {
-			scheduleWriteAnimation(this);
+			scheduleStreamAnimation(this);
 		} else {
-			unscheduleWriteAnimation(this);
+			unscheduleStreamAnimation(this);
 		}
 		this.invalidate();
 	}
 
 	advanceAnimation(): boolean {
 		if (!this.animationEnabled || this.revealedContent === this.targetContent) return false;
-		const next = advanceWriteReveal(this.revealedContent, this.targetContent);
+		const next = advanceStreamReveal(this.revealedContent, this.targetContent);
 		if (next === this.revealedContent) return false;
 		this.revealedContent = next;
 		this.cachedWidth = undefined;
@@ -327,7 +244,7 @@ export class WriteCallComponent implements Component {
 	stop(): void {
 		this.animationEnabled = false;
 		this.showCursor = false;
-		unscheduleWriteAnimation(this);
+		unscheduleStreamAnimation(this);
 	}
 
 	invalidate(): void {

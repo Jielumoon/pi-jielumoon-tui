@@ -21,7 +21,7 @@ import {
 	type RenderContextLike,
 	type ToolResultLike,
 } from "./types.ts";
-import { stopAllWriteAnimations } from "./write-stream.ts";
+import { stopAllStreamAnimations } from "./stream-animation.ts";
 
 /** 本扩展已接管的工具对象标记，保证 reload 幂等。 */
 export const READMAP_RENDERER_MARK = Symbol.for("pi-jielumoon.readmap-renderer");
@@ -249,5 +249,5 @@ export default function installReadmapRenderers(
 	boot();
 	pi.on("session_start", boot);
 	pi.on("before_agent_start", boot);
-	pi.on("session_shutdown", stopAllWriteAnimations);
+	pi.on("session_shutdown", stopAllStreamAnimations);
 }

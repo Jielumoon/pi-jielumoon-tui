@@ -23,10 +23,12 @@ export type RenderOptionsLike = {
 
 export type ReadmapRendererSettings = {
 	writeAnimation?: boolean;
+	editAnimation?: boolean;
 };
 
 export const DEFAULT_READMAP_RENDERER_SETTINGS: ReadmapRendererSettings = {
 	writeAnimation: true,
+	editAnimation: true,
 };
 
 export type ToolPhase = "running" | "success" | "error" | "noop";

@@ -4,7 +4,7 @@ import { BashExecutionComponent, ToolExecutionComponent, UserMessageComponent, t
 import { visibleWidth } from "@earendil-works/pi-tui";
 import installReadmapRenderers, {
 	DiffBodyComponent,
-	advanceWriteReveal,
+	advanceStreamReveal,
 	READMAP_RENDERER_MARK,
 	clampLine,
 	patchReadmapTool,
@@ -1085,11 +1085,11 @@ test("edit no-op and error paths", () => {
 	assert.match(stripAnsi(failed.render(80).join("\n")), /anchor mismatch/);
 });
 
-test("write reveal adapts without splitting Unicode code points", () => {
-	assert.equal(advanceWriteReveal("", "abc"), "a");
-	assert.equal(advanceWriteReveal("", "😀x"), "😀");
-	assert.equal(advanceWriteReveal("abc", "ax"), "ax");
-	assert.equal(advanceWriteReveal("", "x".repeat(1_000)).length, 64);
+test("stream reveal adapts without splitting Unicode code points", () => {
+	assert.equal(advanceStreamReveal("", "abc"), "a");
+	assert.equal(advanceStreamReveal("", "😀x"), "😀");
+	assert.equal(advanceStreamReveal("abc", "ax"), "ax");
+	assert.equal(advanceStreamReveal("", "x".repeat(1_000)).length, 64);
 });
 
 test("write call animates incrementally and flushes when args complete", () => {

@@ -94,6 +94,7 @@ export type FooterSettings = {
 	context: boolean;
 	toolBackground: boolean;
 	writeAnimation: boolean;
+	editAnimation: boolean;
 	traffic: boolean;
 	cache: boolean;
 	cost: boolean;
@@ -117,6 +118,7 @@ export const DEFAULT_FOOTER_SETTINGS: FooterSettings = {
 	context: true,
 	toolBackground: false,
 	writeAnimation: true,
+	editAnimation: true,
 	traffic: true,
 	cache: true,
 	cost: true,
@@ -134,6 +136,7 @@ export const FOOTER_SETTING_DEFINITIONS: readonly FooterSettingDefinition[] = [
 	{ key: "context", label: "上下文数字", aliases: ["context", "ctx"] },
 	{ key: "toolBackground", label: "工具状态底色", aliases: ["tool-bg"] },
 	{ key: "writeAnimation", label: "Write 逐字动画", aliases: ["write-animation"] },
+	{ key: "editAnimation", label: "Edit 逐字动画", aliases: ["edit-animation"] },
 	{ key: "traffic", label: "输入输出流量", aliases: ["traffic", "io"] },
 	{ key: "cache", label: "缓存读写与命中率", aliases: ["cache"] },
 	{ key: "cost", label: "费用 / 订阅用量", aliases: ["cost", "sub"] },

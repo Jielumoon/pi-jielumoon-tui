@@ -4,6 +4,7 @@ import { truncateToWidth, Text, visibleWidth, wrapTextWithAnsi, type Component }
 import { asRecord } from "../guards.ts";
 import { reuseOrCreateText, reuseOrCreateWidthAware } from "./components.ts";
 import { isDiffData, reuseOrCreateDiff } from "./diff.ts";
+import { EditCallComponent, reuseOrCreateEditCall } from "./edit-stream.ts";
 import { renderToolHeader } from "./header.ts";
 import {
 	asThemeLike,
@@ -115,6 +116,13 @@ export function renderToolCall(
 			return new Text("", 0, 0);
 		}
 		return reuseOrCreateWriteCall(context.lastComponent, args, presentation, context, settings);
+	}
+	if (name === "edit") {
+		if (context.isPartial === false) {
+			if (context.lastComponent instanceof EditCallComponent) context.lastComponent.stop();
+			return new Text("", 0, 0);
+		}
+		return reuseOrCreateEditCall(context.lastComponent, args, presentation, context, settings);
 	}
 	if (context.isPartial === false) return reuseOrCreateText(context.lastComponent, "");
 	return reuseOrCreateText(
