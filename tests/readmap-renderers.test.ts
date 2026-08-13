@@ -97,7 +97,9 @@ test("patchToolPayload ignores bad payload and skips non-target tools", () => {
 	assert.deepEqual(patchToolPayload(undefined), []);
 	assert.deepEqual(patchToolPayload(null), []);
 	assert.deepEqual(patchToolPayload("x"), []);
-	assert.deepEqual(patchToolPayload({ grep: makeTool("grep") }), []);
+	assert.deepEqual(patchToolPayload({ todo: makeTool("todo") }), []);
+	// grep/find 已进目标集合：payload 路径同样可达（核心桥接之外的冗余覆盖）。
+	assert.deepEqual(patchToolPayload({ grep: makeTool("grep") }), ["grep"]);
 });
 
 test("patch is idempotent and keeps execute/parameters references", () => {
@@ -907,6 +909,89 @@ test("running tool frames keep wide styled borders stable and low-churn", () => 
 		Date.now = originalNow;
 		cleanup();
 		prototype.render = originalRender;
+	}
+});
+
+test("running cards show a live elapsed timer in the title", () => {
+	type RenderPrototype = { render(this: unknown, width: number): string[] };
+	const prototype = ToolExecutionComponent.prototype as unknown as RenderPrototype;
+	const bashPrototype = BashExecutionComponent.prototype as unknown as RenderPrototype;
+	const originalRender = prototype.render;
+	const originalBashRender = bashPrototype.render;
+	let renderToolBody = (): string[] => ["◇ Edit  target", "body"];
+	prototype.render = () => renderToolBody();
+	bashPrototype.render = () => ["", "$ sleep 99", "output"];
+	const cleanup = installMessageBorders(() => theme as never);
+	const originalNow = Date.now;
+
+	try {
+		// 秒表以组件实例为键：同一 runtime 对象跨帧复用。
+		const runtime = {
+			isPartial: true,
+			result: undefined,
+			toolName: "edit",
+			hideComponent: false,
+			expanded: false,
+			showImages: false,
+		};
+		Date.now = () => 100_000;
+		const first = withEnv("PI_READMAP_RENDER_MODE", "color", () =>
+			prototype.render.call(runtime, 80));
+		assert.doesNotMatch(stripAnsi(first[0] ?? ""), /· \d+s/, "运行不足 1s 不显示耗时");
+		Date.now = () => 105_200;
+		const later = withEnv("PI_READMAP_RENDER_MODE", "color", () =>
+			prototype.render.call(runtime, 80));
+		assert.match(stripAnsi(later[0] ?? ""), /Edit {2}target · 5s ─+╮$/, "标题里要出现实时耗时");
+		assert.ok(later.every((line) => visibleWidth(line) === 80), "耗时不能破坏框宽");
+
+		const settled = withEnv("PI_READMAP_RENDER_MODE", "color", () =>
+			prototype.render.call({
+				...runtime,
+				isPartial: false,
+				result: { isError: false, content: [{ type: "text" }] },
+			}, 80));
+		assert.doesNotMatch(stripAnsi(settled.join("\n")), /· \d+s/, "完成后的卡片不再显示秒表");
+
+		// 宿主默认 shell 会把标题行 padding 到整宽：秒表必须先剥 padding 再追加，
+		// 否则 padding 变成"内部空格"逃过 titleBorder 尾部修剪，右侧横线消失、标题被 … 截断。
+		renderToolBody = () => [
+			`\x1b[38;2;1;2;3m◇ bash echo hi\x1b[39m${" ".repeat(120)}`,
+			"output line",
+		];
+		const paddedRuntime = { ...runtime, toolName: "bash" };
+		Date.now = () => 300_000;
+		withEnv("PI_READMAP_RENDER_MODE", "color", () => prototype.render.call(paddedRuntime, 80));
+		Date.now = () => 303_000;
+		const padded = withEnv("PI_READMAP_RENDER_MODE", "color", () =>
+			prototype.render.call(paddedRuntime, 80));
+		const paddedTitle = stripAnsi(padded[0] ?? "");
+		assert.match(paddedTitle, /echo hi · 3s ─+╮$/, "剥掉 padding 后秒表和右侧横线都要在");
+		assert.doesNotMatch(paddedTitle, /…/, "放得下的标题不得出现截断省略号");
+		assert.doesNotMatch(paddedTitle, / {4,}/, "标题内不得残留整宽 padding");
+
+		// Bash：秒表格式与长命令截断下的 meta 保留。
+		const bashRuntime = {
+			status: "running" as const,
+			command: `while true; do echo ${"x".repeat(120)}; done`,
+			outputLines: ["output"],
+			expanded: false,
+		};
+		Date.now = () => 200_000;
+		const bashFirst = withEnv("PI_READMAP_RENDER_MODE", "color", () =>
+			bashPrototype.render.call(bashRuntime, 60));
+		assert.doesNotMatch(stripAnsi(bashFirst.join("\n")), /· \d+m? ?\d*s/);
+		Date.now = () => 265_000;
+		const bashLater = withEnv("PI_READMAP_RENDER_MODE", "color", () =>
+			bashPrototype.render.call(bashRuntime, 60));
+		const bashTitle = stripAnsi(bashLater[1] ?? "");
+		assert.match(bashTitle, /· 1m 5s ─+╮$/, "长命令末尾的秒表不得被标题截断吃掉");
+		assert.match(bashTitle, /…/, "命令本体按剩余宽度截断");
+		assert.ok(bashLater.slice(1).every((line) => visibleWidth(line) === 60), "bash 框宽保持完整");
+	} finally {
+		Date.now = originalNow;
+		cleanup();
+		prototype.render = originalRender;
+		bashPrototype.render = originalBashRender;
 	}
 });
 

@@ -7,10 +7,10 @@
 - `src/vibrant-footer.ts` + `src/footer/`：Footer 生命周期、渲染、设置、会话 usage、Blackhole，以及自研 `subscription-usage.ts`（Codex / Anthropic / OpenRouter / xAI）
 - `src/nano-context.ts`：上下文用量彩条
 - `src/thinking.ts`、`src/thinking-message.ts`：Thought trail
-- `src/message-borders.ts`：用户消息、工具和 Bash 卡片样式
+- `src/message-borders.ts`：用户消息、工具和 Bash 卡片样式；运行中卡片标题带实时秒表（≥1s 显示，随标题 spinner 帧更新，不扩大重绘范围）
 - `src/sakura-editor.ts`：Sakura 圆角输入框；保留 Pi 原生编辑，遇其它 Editor 时让位
 - `src/working.ts`：Working Shimmer、spinner 与耗时 transcript
-- `src/readmap-renderers/`：接管 read / edit / write / bash / ls 的展示与折叠，不改 execute；入口 `index.ts`，内部按 presentation / header / diff / stream-animation / write-stream / edit-stream / results / patch 分层
+- `src/readmap-renderers/`：接管 read / edit / write / bash / ls（readmap）与 grep / find（pi 核心，经 `ToolExecutionComponent.getRenderShell` 桥接就地 patch）的展示与折叠，不改 execute；入口 `index.ts`，内部按 presentation / header / diff / stream-animation / write-stream / edit-stream / results / patch 分层
 - `src/prototype-patch-registry.ts`：原型补丁安装与清理
 - `src/ansi.ts`、`src/guards.ts`、`src/duration.ts`、`src/token-estimate.ts`：跨模块共享的样式剥离、类型判断、时长格式化与 token 估算
 - `tests/`：Node `assert` + `tsx --test` 回归；`plan/archive/` 仅存已完成计划

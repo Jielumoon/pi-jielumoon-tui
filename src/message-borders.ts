@@ -9,6 +9,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Markdown, type MarkdownTheme, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { stripAnsi, trimTerminalPadding } from "./ansi";
+import { formatElapsed } from "./duration";
 import {
 	mix,
 	renderBoxedLine,
@@ -322,6 +323,23 @@ function stateRail(state: "running" | "success" | "error" | "cancelled"): string
 	return rgbForeground(RAIL_SUCCESS, "┃");
 }
 
+const runningSince = new WeakMap<object, number>();
+
+/**
+ * 运行中卡片标题的实时耗时。运行满 1s 才显示，瞬时工具不闪 `0s`；
+ * 标题行本就随 spinner 每 80ms 变化，附带秒表不会扩大差量重绘范围。
+ */
+function runningElapsedSuffix(runtime: object): string {
+	let startedAt = runningSince.get(runtime);
+	if (startedAt === undefined) {
+		startedAt = Date.now();
+		runningSince.set(runtime, startedAt);
+	}
+	const elapsedMs = Date.now() - startedAt;
+	if (elapsedMs < 1000) return "";
+	return ` · ${formatElapsed(elapsedMs)}`;
+}
+
 const LEADING_STATE_MARKER = /^(?:\x1b\[[0-?]*[ -/]*[@-~])*[◇✓×!·⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏](?:\x1b\[[0-?]*[ -/]*[@-~])*\s+/;
 
 function replaceStateMarker(line: string, state: "running" | "success" | "error"): string {
@@ -400,7 +418,15 @@ function decorateToolMessage(
 
 	const state = toolState(runtime);
 	const firstContent = body.findIndex((line) => !isBlank(line) && !containsTerminalImage([line]));
-	if (firstContent >= 0) body[firstContent] = replaceStateMarker(body[firstContent]!, state);
+	if (firstContent >= 0) {
+		body[firstContent] = replaceStateMarker(body[firstContent]!, state);
+		if (state === "running") {
+			const suffix = runningElapsedSuffix(runtime);
+			// 宿主默认 shell 会把标题行补齐到整宽；直接尾接秒表会让 padding 变成
+			// "内部空格"逃过 titleBorder 的尾部修剪，撑爆标题预算（右侧横线消失、命令被 … 截断）。
+			if (suffix.length > 0) body[firstContent] = trimTerminalPadding(body[firstContent]!) + suffix;
+		}
+	}
 
 	if (isRead) {
 		return [...prefix, ...body].map((line) => {
@@ -430,13 +456,23 @@ function decorateBashMessage(
 				: "success";
 	const headerIndex = body.findIndex((line) => !isBlank(line));
 	if (headerIndex >= 0) {
-		const command = stripAnsi(runtime.command ?? stripAnsi(body[headerIndex]!).trim().replace(/^\$\s*/, ""));
+		let command = stripAnsi(runtime.command ?? stripAnsi(body[headerIndex]!).trim().replace(/^\$\s*/, ""));
 		const meta = state === "error" && runtime.exitCode !== undefined
 			? ` · exit ${runtime.exitCode}`
 			: state === "cancelled"
 				? " · cancelled"
-				: "";
-		body[headerIndex] = `${stateMarker(state)} Bash  ${command}${meta}`;
+				: state === "running"
+					? runningElapsedSuffix(runtime)
+					: "";
+		const marker = stateMarker(state);
+		if (meta.length > 0) {
+			// 长命令被 titleBorder 尾截时不能连带截掉 exit/耗时 meta；6 = "╭─ " + " ─╮"。
+			const available = frameWidth(width) - 6 - visibleWidth(`${marker} Bash  `) - visibleWidth(meta);
+			if (available >= 8 && visibleWidth(command) > available) {
+				command = truncateToWidth(command, available, "…");
+			}
+		}
+		body[headerIndex] = `${marker} Bash  ${command}${meta}`;
 	}
 
 	const settledBody = body.filter((line, index) => {

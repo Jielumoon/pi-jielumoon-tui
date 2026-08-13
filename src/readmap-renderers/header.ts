@@ -71,7 +71,9 @@ function toolSubject(
 	context: RenderContextLike,
 ): ToolSubject {
 	const record = asRecord(args) ?? {};
-	const path = typeof record.path === "string" ? displayText(record.path, presentation) : name === "ls" ? "." : "";
+	const path = typeof record.path === "string"
+		? displayText(record.path, presentation)
+		: name === "ls" || name === "grep" || name === "find" ? "." : "";
 	const linkedPath = (): string => {
 		if (!path) return styleText(presentation, "toolOutput", "…");
 		const shown = shortenPath(path);
@@ -107,6 +109,25 @@ function toolSubject(
 			meta.push(`limit: ${displayText(String(record.limit), presentation)}`);
 		}
 		return { target: linkedPath(), meta };
+	}
+	if (name === "grep" || name === "find") {
+		const rawPattern = typeof record.pattern === "string" ? displayText(record.pattern, presentation) : "";
+		const fitted = truncateToWidth(rawPattern, 40, "…");
+		const patternText = rawPattern.length === 0
+			? styleText(presentation, "toolOutput", "…")
+			: styleText(presentation, "accent", name === "grep" ? `/${fitted}/` : fitted);
+		const meta: string[] = [];
+		if (name === "grep") {
+			if (typeof record.glob === "string") meta.push(`glob: ${displayText(record.glob, presentation)}`);
+			if (record.ignoreCase === true) meta.push("-i");
+			if (record.literal === true) meta.push("literal");
+			if (typeof record.context === "number" && record.context > 0) meta.push(`±${record.context}`);
+		}
+		if (typeof record.limit === "number") meta.push(`limit: ${record.limit}`);
+		return {
+			target: `${patternText}${styleText(presentation, "dim", " in ")}${linkedPath()}`,
+			meta,
+		};
 	}
 	return { target: "", meta: [] };
 }

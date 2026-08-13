@@ -1,4 +1,4 @@
-/** read / edit / write / bash / ls 的调用行与结果渲染；只产内容，不画外框。 */
+/** read / edit / write / bash / ls / grep / find 的调用行与结果渲染；只产内容，不画外框。 */
 
 import { truncateToWidth, Text, visibleWidth, wrapTextWithAnsi, type Component } from "@earendil-works/pi-tui";
 import { asRecord } from "../guards.ts";
@@ -42,6 +42,10 @@ const BASH_SHORT_MAX_CHARS = 2_000;
 const BASH_COLLAPSED_PREVIEW_LINES = 4;
 /** ls 折叠态最多展示的目录条目。 */
 const LS_COLLAPSED_PREVIEW_ENTRIES = 8;
+/** grep 折叠态最多展示的匹配数（文件分组行不计入）。 */
+const GREP_COLLAPSED_PREVIEW_MATCHES = 6;
+/** find 折叠态最多展示的结果条目。 */
+const FIND_COLLAPSED_PREVIEW_ENTRIES = 8;
 
 function wrapHashlines(text: string, width: number, presentation: RenderPresentation): string[] {
 	const out: string[] = [];
@@ -503,6 +507,233 @@ export function renderLsResult(
 			...lines,
 			...(hidden > 0 || (!expanded && truncated)
 				? [collapsedHint(shown, total, "entries", !expanded, p)]
+				: []),
+		];
+	});
+}
+
+// ─── grep / find ─────────────────────────────────────────────────
+
+/** grep / find 把截断提示以 `\n\n[...]` 追加在正文尾部；剥离后只保留 meta 徽章。 */
+function stripTrailingNotice(body: string): string {
+	const match = /\n\n\[[^\n]*\]$/.exec(body);
+	return match ? body.slice(0, match.index) : body;
+}
+
+type GrepRow = { kind: "match" | "context"; file: string; lineNo: string; text: string }
+	| { kind: "plain"; text: string };
+
+const GREP_MATCH_LINE_RE = /^(.+?):(\d+): (.*)$/;
+const GREP_CONTEXT_LINE_RE = /^(.+?)-(\d+)- (.*)$/;
+
+/** 解析 `path:12: text`（匹配）与 `path-12- text`（上下文）；双双命中时取分隔符更靠前者。 */
+function parseGrepRow(line: string): GrepRow {
+	const match = GREP_MATCH_LINE_RE.exec(line);
+	const context = GREP_CONTEXT_LINE_RE.exec(line);
+	if (match && (!context || match[1]!.length <= context[1]!.length)) {
+		return { kind: "match", file: match[1]!, lineNo: match[2]!, text: match[3]! };
+	}
+	if (context) {
+		return { kind: "context", file: context[1]!, lineNo: context[2]!, text: context[3]! };
+	}
+	return { kind: "plain", text: line };
+}
+
+function escapeRegExpLiteral(value: string): string {
+	return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
+ * 匹配词高亮用的 JS 正则。rg 的 DFA 引擎没有回溯，而 `(a+)+` 这类嵌套量词在
+ * JS 回溯引擎上可能指数爆炸，保守启发式命中时直接放弃高亮（只降级、不冒险）。
+ */
+function grepHighlightRegex(args: unknown): RegExp | undefined {
+	const record = asRecord(args);
+	const pattern = typeof record?.pattern === "string" ? record.pattern : "";
+	if (pattern.length === 0 || pattern.length > 200) return undefined;
+	const source = record?.literal === true ? escapeRegExpLiteral(pattern) : pattern;
+	if (record?.literal !== true && /[+*?}][)\]]*[+*{]/.test(source)) return undefined;
+	try {
+		return new RegExp(source, record?.ignoreCase === true ? "gi" : "g");
+	} catch {
+		return undefined;
+	}
+}
+
+function highlightGrepText(
+	text: string,
+	highlight: RegExp | undefined,
+	presentation: RenderPresentation,
+): string {
+	if (!highlight || presentation.mode !== "color" || text.length === 0) {
+		return styleText(presentation, "toolOutput", text);
+	}
+	let out = "";
+	let cursor = 0;
+	try {
+		highlight.lastIndex = 0;
+		for (const found of text.matchAll(highlight)) {
+			const hit = found[0] ?? "";
+			if (hit.length === 0) continue;
+			const index = found.index ?? 0;
+			if (index > cursor) out += styleText(presentation, "toolOutput", text.slice(cursor, index));
+			out += styleText(presentation, "accent", hit);
+			cursor = index + hit.length;
+		}
+	} catch {
+		return styleText(presentation, "toolOutput", text);
+	}
+	if (cursor === 0) return styleText(presentation, "toolOutput", text);
+	if (cursor < text.length) out += styleText(presentation, "toolOutput", text.slice(cursor));
+	return out;
+}
+
+export function renderGrepResult(
+	result: ToolResultLike,
+	options: RenderOptionsLike,
+	theme: ThemeLike | undefined,
+	context: RenderContextLike,
+): Component {
+	const p = resolvePresentation(theme);
+	if (context.isPartial || options.isPartial) return reuseOrCreateText(context.lastComponent, "");
+
+	const rawBody = textOf(result, p);
+	if (context.isError || result.isError) return renderToolError("grep", rawBody, options, p, context);
+
+	const details = asRecord(result.details);
+	const truncated = Boolean(details?.matchLimitReached)
+		|| Boolean(asRecord(details?.truncation)?.truncated)
+		|| Boolean(details?.linesTruncated);
+	const body = stripTrailingNotice(rawBody).replace(/\n+$/, "");
+	const lines = body.length === 0 ? [] : body.split("\n").filter((line) => line.length > 0);
+	if (lines.length === 0 || body.trim() === "No matches found") {
+		return reuseOrCreateText(context.lastComponent, renderToolHeader("grep", context.args, p, context, {
+			phase: "success",
+			meta: ["no matches"],
+		}));
+	}
+
+	const rows = lines.map(parseGrepRow);
+	const matchTotal = rows.filter((row) => row.kind === "match").length;
+	const fileTotal = new Set(
+		rows.flatMap((row) => (row.kind === "plain" ? [] : [row.file])),
+	).size;
+	const expanded = isExpanded(options, context);
+
+	// 折叠按匹配数截断：第 N+1 个匹配（及其后续行）不再展示，前置上下文随其匹配一起隐藏。
+	let visibleRows = rows;
+	let shownMatches = matchTotal;
+	if (!expanded && matchTotal > GREP_COLLAPSED_PREVIEW_MATCHES) {
+		let seen = 0;
+		let cut = rows.length;
+		for (const [index, row] of rows.entries()) {
+			if (row.kind !== "match") continue;
+			seen += 1;
+			if (seen > GREP_COLLAPSED_PREVIEW_MATCHES) {
+				cut = index;
+				break;
+			}
+		}
+		visibleRows = rows.slice(0, cut);
+		shownMatches = GREP_COLLAPSED_PREVIEW_MATCHES;
+	}
+	const hiddenMatches = matchTotal - shownMatches;
+
+	const meta = [
+		`${matchTotal} ${matchTotal === 1 ? "match" : "matches"}`,
+		...(fileTotal > 1 ? [`${fileTotal} files`] : []),
+		...(truncated ? ["truncated"] : []),
+	];
+	const header = renderToolHeader("grep", context.args, p, context, {
+		phase: "success",
+		meta,
+		expandable: !expanded && (hiddenMatches > 0 || truncated),
+	});
+	const highlight = grepHighlightRegex(context.args);
+	const lineNoWidth = rows.reduce(
+		(max, row) => (row.kind === "plain" ? max : Math.max(max, visibleWidth(row.lineNo))),
+		1,
+	);
+
+	return reuseOrCreateWidthAware(context.lastComponent, (width) => {
+		const out: string[] = [header];
+		let currentFile: string | undefined;
+		for (const row of visibleRows) {
+			if (row.kind === "plain") {
+				out.push(p.mode === "screen-reader"
+					? `output: ${row.text}`
+					: clampLine(styleText(p, "toolOutput", row.text), width));
+				continue;
+			}
+			if (p.mode === "screen-reader") {
+				out.push(`${row.kind}: ${row.file}:${row.lineNo}: ${row.text}`);
+				continue;
+			}
+			if (row.file !== currentFile) {
+				currentFile = row.file;
+				out.push(clampLine(styleText(p, "syntaxType", row.file), width));
+			}
+			const prefix = `  ${styleText(p, "dim", padStartVisible(row.lineNo, lineNoWidth))}${styleText(p, "muted", row.kind === "match" ? ":" : "·")} `;
+			const content = row.kind === "match"
+				? highlightGrepText(row.text, highlight, p)
+				: styleText(p, "dim", row.text);
+			out.push(...wrapWithHangingIndent(prefix, content, width));
+		}
+		if (hiddenMatches > 0 || (!expanded && truncated)) {
+			out.push(collapsedHint(shownMatches, matchTotal, "matches", !expanded, p));
+		}
+		return out;
+	});
+}
+
+export function renderFindResult(
+	result: ToolResultLike,
+	options: RenderOptionsLike,
+	theme: ThemeLike | undefined,
+	context: RenderContextLike,
+): Component {
+	const p = resolvePresentation(theme);
+	if (context.isPartial || options.isPartial) return reuseOrCreateText(context.lastComponent, "");
+
+	const rawBody = textOf(result, p);
+	if (context.isError || result.isError) return renderToolError("find", rawBody, options, p, context);
+
+	const details = asRecord(result.details);
+	const truncated = Boolean(details?.resultLimitReached)
+		|| Boolean(asRecord(details?.truncation)?.truncated);
+	const body = stripTrailingNotice(rawBody).replace(/\n+$/, "");
+	const paths = body.length === 0 ? [] : body.split("\n").filter((line) => line.length > 0);
+	if (paths.length === 0 || body.trim() === "No files found matching pattern") {
+		return reuseOrCreateText(context.lastComponent, renderToolHeader("find", context.args, p, context, {
+			phase: "success",
+			meta: ["no files"],
+		}));
+	}
+
+	const expanded = isExpanded(options, context);
+	// find 输出目录带尾随 `/`；映射成 ls 条目复用同一套双列排版。
+	const entries = paths.map((path) => ({
+		name: path.endsWith("/") ? path.slice(0, -1) : path,
+		type: path.endsWith("/") ? "dir" : "file",
+	}));
+	const total = entries.length;
+
+	return reuseOrCreateWidthAware(context.lastComponent, (width) => {
+		const layout = lsEntryLines(entries, p, width, expanded ? undefined : FIND_COLLAPSED_PREVIEW_ENTRIES);
+		const hidden = Math.max(0, total - layout.shown);
+		const header = renderToolHeader("find", context.args, p, context, {
+			phase: "success",
+			meta: [
+				`${total} ${total === 1 ? "result" : "results"}`,
+				...(truncated ? ["truncated"] : []),
+			],
+			expandable: !expanded && (hidden > 0 || truncated),
+		});
+		return [
+			header,
+			...layout.lines,
+			...(hidden > 0 || (!expanded && truncated)
+				? [collapsedHint(layout.shown, total, "results", !expanded, p)]
 				: []),
 		];
 	});
