@@ -265,6 +265,9 @@ function toolState(runtime: ToolRuntime): "running" | "success" | "error" {
 }
 
 function stateMarker(state: "running" | "success" | "error" | "cancelled"): string {
+	// 运行态标题 spinner 每 80ms 换帧。除它之外，运行中卡片的所有行必须逐字节稳定
+	// （背景、边框、rail 均为固定色），否则 pi-tui 的 firstChanged..lastChanged 整段
+	// 清行重写会在不支持同步输出的终端上放大成整块闪烁；测试对此有帧稳定断言。
 	if (state === "running") return renderSakuraSpinner();
 	if (state === "error") return rgbForeground(RAIL_ERROR, "×");
 	if (state === "cancelled") return rgbForeground(RAIL_CANCELLED, "!");

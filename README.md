@@ -41,6 +41,7 @@
 - 工作中使用 Pi 原生 Braille spinner：
   `⠋ ⠙ ⠹ ⠸ ⠼ ⠴ ⠦ ⠧ ⠇ ⠏`
 - Working、运行中工具、retry 与 compaction 共享 Sakura macaron Braille spinner；其它文字保持静止
+- 运行中卡片除标题 spinner 外逐字节稳定（背景/边框/rail 固定色）：pi-tui 按"首个变化行到最后变化行"整段清行重绘，任何多余的行级变化都会在不支持同步输出（DEC 2026）的终端上放大成闪烁
 - retry countdown 与 context compaction 同样只动画 spinner，避免整句 shimmer
 - 5 秒以内任务不写 transcript；长任务完成后追加 dim `· Ns`
 

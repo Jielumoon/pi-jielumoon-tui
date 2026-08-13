@@ -663,6 +663,7 @@ test("read stays borderless while framed tools embed titles without native backg
 
 		const originalNow = Date.now;
 		try {
+			// 运行中卡片除标题 spinner 外必须逐字节稳定，避免扩大 pi-tui 的差量重绘区间。
 			renderBody = () => ["◇ Edit  target"];
 			Date.now = () => 0;
 			const firstFrame = withEnv("PI_READMAP_RENDER_MODE", "color", () =>
@@ -672,6 +673,7 @@ test("read stays borderless while framed tools embed titles without native backg
 				prototype.render.call({ ...readRuntime, isPartial: true, result: undefined, toolName: "edit" }, 80));
 			assert.match(stripAnsi(firstFrame.join("\n")), /^╭─ ⠋ Edit/);
 			assert.match(stripAnsi(secondFrame.join("\n")), /^╭─ ⠙ Edit/);
+			assert.deepEqual(firstFrame.slice(1), secondFrame.slice(1), "标题 spinner 之外的行必须逐字节稳定");
 
 			renderBody = () => ["◇ Read  target"];
 			const runningRead = withEnv("PI_READMAP_RENDER_MODE", "color", () =>
@@ -899,6 +901,7 @@ test("running tool frames keep wide styled borders stable and low-churn", () => 
 				"completed bottom border should retain the Sakura gradient");
 			assert.notEqual(first[1], second[1], "running marker should keep animating");
 			assert.equal(first.at(-1), second.at(-1), "static bottom corner must not repaint differently");
+			assert.deepEqual(first.slice(2), second.slice(2), "标题 spinner 之外的行必须逐字节稳定");
 		}
 	} finally {
 		Date.now = originalNow;

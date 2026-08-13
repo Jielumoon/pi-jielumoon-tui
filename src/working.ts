@@ -16,6 +16,14 @@ const SPINNER_INTERVAL_MS = 80;
 const MIN_ELAPSED_TRANSCRIPT_MS = 5000;
 const ELAPSED_ENTRY_TYPE = "pi-jielumoon-elapsed";
 
+/**
+ * Working 行与工具卡标题 spinner 同为 80ms 动画：pi-tui 差量重绘会把两者之间
+ * 的行整段清行重写，在不支持同步输出（DEC 2026）的终端上理论上可见闪烁。
+ * 实测用户终端（Terax，DECRQM 报 2026;0）下小跨度重绘在渲染帧内原子完成、
+ * 静默场景不闪；重负载流式闪烁由内容变化主导，与 spinner 无关，故保留双 spinner。
+ * 若未来要退回"单动画行"，把此处 frames 换成两帧相同的静态标记即可
+ * （帧数 >1 维持 Loader 的 80ms requestRender 心跳，字符串不变则不参与重绘）。
+ */
 function indicator(): WorkingIndicatorOptions {
 	return {
 		frames: SAKURA_SPINNER_FRAMES,
