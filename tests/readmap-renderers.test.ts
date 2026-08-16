@@ -176,17 +176,17 @@ test("install listens for hashline executors and patches bash via registerTool",
 	assert.equal(laterBash[READMAP_RENDERER_MARK], true);
 });
 
-test("read renderer respects collapsed summary and expanded hashlines", () => {
+test("read renderer keeps the collapsed summary and shows the completed line range", () => {
 	const tool = makeTool("read");
 	patchReadmapTool(tool);
 	const call = tool.renderCall?.(
-		{ path: "src/foo.ts", offset: 20, limit: 5, symbol: "bar" },
+		{ path: "src/foo.ts", offset: "20", limit: "5", symbol: "bar" },
 		theme,
 		{ cwd: "/tmp" },
 	) as { render: (w: number) => string[] };
 	const callText = stripAnsi(call.render(80).join("\n"));
 	assert.match(callText, /Read/);
-	assert.match(callText, /foo\.ts:20–24/);
+	assert.match(callText, /foo\.ts:20 ~ 24/);
 	assert.match(callText, /symbol: bar/);
 
 	const result = tool.renderResult?.(
@@ -195,7 +195,7 @@ test("read renderer respects collapsed summary and expanded hashlines", () => {
 			details: {
 				ptcValue: {
 					range: { startLine: 20, endLine: 21, totalLines: 100 },
-					map: true,
+					map: { requested: false, appended: false },
 					symbol: { name: "bar" },
 					warnings: [],
 				},
@@ -203,12 +203,13 @@ test("read renderer respects collapsed summary and expanded hashlines", () => {
 		},
 		{ expanded: false },
 		theme,
-		{ expanded: false },
+		{
+			expanded: false,
+			args: { path: "src/foo.ts", offset: "20", limit: "5", symbol: "bar" },
+		},
 	) as { render: (w: number) => string[] };
 	const collapsed = stripAnsi(result.render(80).join("\n"));
-	assert.match(collapsed, /✓ Read.*2 lines/);
-	assert.match(collapsed, /map/);
-	assert.match(collapsed, /Ctrl\+O/);
+	assert.match(collapsed, /✓ Read.*foo\.ts.*20 ~ 21.*2 lines.*map.*Ctrl\+O/);
 	assert.doesNotMatch(collapsed, /showing 0 of/);
 	assert.doesNotMatch(collapsed, /const a = 1/);
 
@@ -230,6 +231,53 @@ test("read renderer respects collapsed summary and expanded hashlines", () => {
 	assert.match(expandedText, /const a = 1/);
 });
 
+test("read renderer colors the completed line range as syntaxNumber", () => {
+	const tool = makeTool("read");
+	patchReadmapTool(tool);
+	const colors: Array<{ color: string; text: string }> = [];
+	const rangeTheme = {
+		fg: (color: string, text: string) => {
+			colors.push({ color, text });
+			return text;
+		},
+		bold: (text: string) => text,
+	};
+	const result = tool.renderResult?.(
+		{
+			content: [{ type: "text", text: "31:a31|line 31\n32:a32|line 32" }],
+			details: {
+				ptcValue: {
+					range: { startLine: 31, endLine: 32, totalLines: 100 },
+					map: { requested: false, appended: false },
+					warnings: [],
+				},
+			},
+		},
+		{ expanded: false },
+		rangeTheme,
+		{ expanded: false, args: { path: "src/foo.ts", offset: "31", limit: "2" } },
+	) as { render: (w: number) => string[] };
+	result.render(80);
+	assert.ok(
+		colors.some((part) => part.color === "syntaxNumber" && part.text === "31 ~ 32"),
+		"completed read range should use syntaxNumber color",
+	);
+});
+
+test("read renderer rejects malformed and unsafe line ranges", () => {
+	const tool = makeTool("read");
+	patchReadmapTool(tool);
+	for (const args of [
+		{ path: "foo.ts", offset: "abc", limit: "2" },
+		{ path: "foo.ts", offset: "-5", limit: "2" },
+		{ path: "foo.ts", offset: 0, limit: 2 },
+		{ path: "foo.ts", offset: Number.MAX_SAFE_INTEGER + 1, limit: 1 },
+	]) {
+		const call = tool.renderCall?.(args, theme, { cwd: "/tmp" }) as { render: (w: number) => string[] };
+		const rendered = stripAnsi(call.render(80).join("\n"));
+		assert.doesNotMatch(rendered, /foo\.ts:\d+ ~ \d+/);
+	}
+});
 
 test("P0 keeps diff and hashline gutters aligned with visible-width paths", () => {
 	const diff = new DiffBodyComponent({
@@ -288,11 +336,11 @@ test("P0 keeps diff and hashline gutters aligned with visible-width paths", () =
 		"read path should use syntaxType color",
 	);
 	assert.ok(
-		rangeColors.some((part) => part.color === "syntaxNumber" && part.text === ":410–564"),
+		rangeColors.some((part) => part.color === "syntaxNumber" && part.text === ":410 ~ 564"),
 		"read range suffix should use syntaxNumber color",
 	);
 	assert.ok(
-		!rangeColors.some((part) => part.color === "syntaxType" && part.text.includes(":410–564")),
+		!rangeColors.some((part) => part.color === "syntaxType" && part.text.includes(":410 ~ 564")),
 		"range suffix must not be colored as part of the path",
 	);
 

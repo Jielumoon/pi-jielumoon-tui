@@ -46,6 +46,11 @@ function toolLabel(theme: ThemeLike | undefined, name: string): string {
 	return themeFg(theme, "toolTitle", themeBold(theme, label));
 }
 
+export type LineRange = { start: number; end: number };
+
+const LINE_RANGE_SEPARATOR = " ~ ";
+const LINE_RANGE_PATTERN = /^\d+ ~ \d+$/;
+
 export function phaseMarker(presentation: RenderPresentation, phase: ToolPhase): string {
 	if (presentation.mode !== "color") return "";
 	const marker = phase === "running" ? "◇" : phase === "error" ? "×" : phase === "noop" ? "·" : "✓";
@@ -53,13 +58,32 @@ export function phaseMarker(presentation: RenderPresentation, phase: ToolPhase):
 	return styleText(presentation, color, marker);
 }
 
-function rangeSuffix(args: Record<string, unknown> | undefined): string {
-	const offset = args?.offset;
-	const limit = args?.limit;
-	if (typeof offset === "number" && typeof limit === "number" && offset > 0 && limit > 0) {
-		return `:${offset}–${offset + limit - 1}`;
-	}
-	return "";
+/** Provider 网关可能把 offset/limit 序列化为数字字符串。 */
+function normalizeLineNumber(value: unknown): number | undefined {
+	const parsed = typeof value === "number"
+		? value
+		: typeof value === "string" && /^\d+$/.test(value.trim())
+			? Number(value)
+			: Number.NaN;
+	return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : undefined;
+}
+
+export function parseLineRange(args: Record<string, unknown> | undefined): LineRange | undefined {
+	const offset = normalizeLineNumber(args?.offset);
+	const limit = normalizeLineNumber(args?.limit);
+	if (offset === undefined || limit === undefined) return undefined;
+	const end = offset + limit - 1;
+	return Number.isSafeInteger(end) ? { start: offset, end } : undefined;
+}
+
+export function formatLineRange(range: LineRange | undefined, inPath = false): string {
+	if (!range) return "";
+	const formatted = `${range.start}${LINE_RANGE_SEPARATOR}${range.end}`;
+	return inPath ? `:${formatted}` : formatted;
+}
+
+export function isLineRangeFormat(value: string): boolean {
+	return LINE_RANGE_PATTERN.test(value);
 }
 
 type ToolSubject = { target: string; meta: string[] };
@@ -69,6 +93,7 @@ function toolSubject(
 	args: unknown,
 	presentation: RenderPresentation,
 	context: RenderContextLike,
+	phase: ToolPhase,
 ): ToolSubject {
 	const record = asRecord(args) ?? {};
 	const path = typeof record.path === "string"
@@ -84,7 +109,7 @@ function toolSubject(
 	if (name === "read") {
 		const meta: string[] = [];
 		if (typeof record.symbol === "string") meta.push(`symbol: ${displayText(record.symbol, presentation)}`);
-		const suffix = rangeSuffix(record);
+		const suffix = phase === "running" ? formatLineRange(parseLineRange(record), true) : "";
 		const target = linkedPath();
 		return {
 			target: path && suffix ? `${target}${styleText(presentation, "syntaxNumber", suffix)}` : target,
@@ -133,6 +158,7 @@ function toolSubject(
 }
 
 function styleToolMeta(presentation: RenderPresentation, value: string): string {
+	if (isLineRangeFormat(value)) return styleText(presentation, "syntaxNumber", value);
 	const stats = /^(\+\d+)\s+(−\d+)$/u.exec(value);
 	if (!stats) return styleText(presentation, "dim", value);
 	return `${styleText(presentation, "toolDiffAdded", stats[1]!)} ${styleText(presentation, "toolDiffRemoved", stats[2]!)}`;
@@ -145,7 +171,7 @@ export function renderToolHeader(
 	context: RenderContextLike,
 	options: { phase: ToolPhase; meta?: readonly string[]; expandable?: boolean },
 ): string {
-	const subject = toolSubject(name, args, presentation, context);
+	const subject = toolSubject(name, args, presentation, context, options.phase);
 	const meta = [...new Set([...subject.meta, ...(options.meta ?? [])].filter((item) => item.length > 0))];
 	if (options.expandable) meta.push(EXPAND_KEY);
 

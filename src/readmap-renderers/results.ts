@@ -5,7 +5,7 @@ import { asRecord } from "../guards.ts";
 import { reuseOrCreateText, reuseOrCreateWidthAware } from "./components.ts";
 import { isDiffData, reuseOrCreateDiff } from "./diff.ts";
 import { EditCallComponent, reuseOrCreateEditCall } from "./edit-stream.ts";
-import { renderToolHeader } from "./header.ts";
+import { formatLineRange, renderToolHeader } from "./header.ts";
 import {
 	asThemeLike,
 	clampLine,
@@ -191,13 +191,18 @@ export function renderReadResult(
 	if (ptc) {
 		const range = asRecord(ptc.range);
 		const truncation = asRecord(ptc.truncation);
-		const start = typeof range?.startLine === "number" ? range.startLine : 1;
-		const end = typeof range?.endLine === "number" ? range.endLine : start;
+		const startLine = typeof range?.startLine === "number" ? range.startLine : undefined;
+		const endLine = typeof range?.endLine === "number" ? range.endLine : undefined;
+		const start = startLine ?? 1;
+		const end = endLine ?? start;
 		const total = typeof range?.totalLines === "number" ? range.totalLines : end;
 		const visible = truncation && typeof truncation.outputLines === "number"
 			? truncation.outputLines
 			: Math.max(0, end - start + 1);
 		const word = visible === 1 ? "line" : "lines";
+		if (startLine !== undefined && endLine !== undefined) {
+			meta.push(formatLineRange({ start: startLine, end: endLine }));
+		}
 		meta.push(truncation ? `${visible}/${typeof truncation.totalLines === "number" ? truncation.totalLines : total} ${word}` : `${visible} ${word}`);
 		if (truncation) meta.push("truncated");
 		const symbol = asRecord(ptc.symbol);
