@@ -103,6 +103,7 @@ export type FooterSettings = {
 	model: boolean;
 	thinking: boolean;
 	blackhole: boolean;
+	magicContext: boolean;
 	planning: boolean;
 	extensions: boolean;
 };
@@ -126,7 +127,8 @@ export const DEFAULT_FOOTER_SETTINGS: FooterSettings = {
 	provider: true,
 	model: true,
 	thinking: true,
-	blackhole: true,
+	blackhole: false,
+	magicContext: true,
 	extensions: true,
 	planning: true,
 };
@@ -145,6 +147,7 @@ export const FOOTER_SETTING_DEFINITIONS: readonly FooterSettingDefinition[] = [
 	{ key: "model", label: "Model", aliases: ["model"] },
 	{ key: "thinking", label: "Thinking level", aliases: ["thinking"] },
 	{ key: "blackhole", label: "Blackhole（O/R/P/C）", aliases: ["blackhole", "bh"] },
+	{ key: "magicContext", label: "Magic Context（MC）", aliases: ["magic-context", "magic", "mc"] },
 	{ key: "extensions", label: "扩展状态 / 订阅额度", aliases: ["extensions", "extension", "status", "usage"] },
 	{ key: "planning", label: "计划阶段状态", aliases: ["planning", "plan", "phases"] },
 ];

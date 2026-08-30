@@ -66,9 +66,25 @@ test("read applies only known boolean fields", async () => {
 	});
 });
 
+test("read keeps the two memory displays mutually exclusive", async () => {
+	await withAgentDir((dir) => {
+		writeFileSync(join(dir, FOOTER_SETTINGS_FILE), JSON.stringify({ blackhole: true }), "utf8");
+		assert.deepEqual(
+			{ blackhole: readFooterSettings().blackhole, magicContext: readFooterSettings().magicContext },
+			{ blackhole: true, magicContext: false },
+		);
+
+		writeFileSync(join(dir, FOOTER_SETTINGS_FILE), JSON.stringify({ blackhole: true, magicContext: true }), "utf8");
+		assert.deepEqual(
+			{ blackhole: readFooterSettings().blackhole, magicContext: readFooterSettings().magicContext },
+			{ blackhole: false, magicContext: true },
+		);
+	});
+});
+
 test("save and read round-trip the full settings object", async () => {
 	await withAgentDir(() => {
-		const settings = { ...DEFAULT_FOOTER_SETTINGS, blackhole: false, toolBackground: true };
+		const settings = { ...DEFAULT_FOOTER_SETTINGS, blackhole: false, magicContext: true, toolBackground: true };
 		assert.equal(saveFooterSettings(settings), true, "save should succeed in a writable agent dir");
 		assert.deepEqual(readFooterSettings(), settings, "read should return exactly what was saved");
 	});
@@ -143,7 +159,19 @@ test("command aliases toggle their settings and persist", async () => {
 		await harness.run("ctx");
 		assert.equal(harness.controller.settings.context, true, "bare alias should flip back");
 
-		assert.ok(harness.refreshCount() >= 4, "every toggle should refresh the footer");
+		await harness.run("blackhole on");
+		assert.equal(harness.controller.settings.blackhole, true, "Blackhole should enable through its alias");
+		assert.equal(harness.controller.settings.magicContext, false, "enabling Blackhole should hide Magic Context");
+
+		await harness.run("magic on");
+		assert.equal(harness.controller.settings.magicContext, true, "Magic Context should enable through its alias");
+		assert.equal(harness.controller.settings.blackhole, false, "enabling Magic Context should hide Blackhole");
+		assert.deepEqual(
+			{ blackhole: readFooterSettings().blackhole, magicContext: readFooterSettings().magicContext },
+			{ blackhole: false, magicContext: true },
+		);
+
+		assert.ok(harness.refreshCount() >= 6, "every toggle should refresh the footer");
 	});
 });
 

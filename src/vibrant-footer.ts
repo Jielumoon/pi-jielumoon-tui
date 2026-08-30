@@ -136,6 +136,7 @@ export default function vibrantFooter(
 		if (enabled) refreshSnapshot(ctx, { usage: true });
 	};
 
+	pi.on("agent_start", refreshLightweight);
 	pi.on("context", refreshLightweight);
 	pi.on("message_end", refreshLightweight);
 	pi.on("agent_end", refreshWithUsage);

@@ -270,6 +270,8 @@ test("footer keeps semantic colors for traffic, cache, cost, and healthy quota",
 
 test("Blackhole stays visible whenever its snapshot is available", () => {
 	const settings = structuredClone(DEFAULT_FOOTER_SETTINGS);
+	settings.blackhole = true;
+	settings.magicContext = false;
 	const healthySnapshot: FooterSnapshot = {
 		...snapshot,
 		blackhole: {
@@ -295,6 +297,55 @@ test("Blackhole stays visible whenever its snapshot is available", () => {
 	settings.blackhole = false;
 	const hidden = renderFooter(healthySnapshot, settings, renderData, 80, theme, icons);
 	assert.doesNotMatch(hidden.join("\n"), /BH auto/);
+});
+
+
+test("Magic Context replaces the Blackhole row without duplicating its status", () => {
+	const settings = structuredClone(DEFAULT_FOOTER_SETTINGS);
+	settings.blackhole = false;
+	settings.magicContext = true;
+	const renderData = {
+		branch: "main",
+		extensionStatuses: new Map([
+			["magic-context", "mc: 140K (36%) · idle"],
+			["usage", "usage refreshing"],
+		]),
+	};
+
+	const lines = renderFooter(snapshot, settings, renderData, 80, theme, icons);
+	assert.match(lines.join("\n"), /✦ MC 140K · 36% · idle/);
+	assert.equal(lines.filter((line) => line.includes("MC")).length, 1);
+	assert.doesNotMatch(lines.join("\n"), /mc:/);
+	assert.match(lines.join("\n"), /usage refreshing/);
+	assert.ok(lines.every((line) => visibleWidth(line) <= 80));
+
+	settings.magicContext = false;
+	const hidden = renderFooter(snapshot, settings, renderData, 80, theme, icons);
+	assert.doesNotMatch(hidden.join("\n"), /MC|mc:/);
+});
+
+
+test("Magic Context shows the current model while active or failed", () => {
+	const settings = structuredClone(DEFAULT_FOOTER_SETTINGS);
+	settings.blackhole = false;
+	settings.magicContext = true;
+	const renderStatus = (status: string): string => {
+		const lines = renderFooter(
+			snapshot,
+			settings,
+			{ branch: "main", extensionStatuses: new Map([["magic-context", status]]) },
+			120,
+			theme,
+			icons,
+		);
+		return lines.find((line) => line.includes("✦ MC")) ?? "";
+	};
+
+	assert.match(renderStatus("mc: 109.2K (54%) · historian"), /historian · openai\/gpt-5/);
+	assert.match(renderStatus("mc: 109.2K (54%) · recomp"), /recomp · openai\/gpt-5/);
+	assert.match(renderStatus("mc: 109.2K (54%) · ⚠ historian failed"), /historian failed · openai\/gpt-5/);
+	assert.doesNotMatch(renderStatus("mc: 109.2K (54%) · idle"), /openai\/gpt-5/);
+	assert.doesNotMatch(renderStatus("mc: 109.2K (54%) · idle\nunsafe"), /\n/);
 });
 
 test("footer visual fixture stays bounded at 40/60/80/120/160 columns", () => {

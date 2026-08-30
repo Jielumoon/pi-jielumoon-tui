@@ -18,10 +18,20 @@ export function readFooterSettings(): FooterSettings {
 		if (!raw || typeof raw !== "object" || Array.isArray(raw)) return settings;
 
 		const values = raw as Record<string, unknown>;
+		let explicitBlackhole = false;
+		let explicitMagicContext = false;
 		for (const definition of FOOTER_SETTING_DEFINITIONS) {
 			if (typeof values[definition.key] === "boolean") {
 				settings[definition.key] = values[definition.key] as boolean;
+				if (definition.key === "blackhole") explicitBlackhole = true;
+				if (definition.key === "magicContext") explicitMagicContext = true;
 			}
+		}
+
+		if (settings.blackhole && settings.magicContext) {
+			// Preserve an old config that explicitly enabled Blackhole; otherwise MC wins.
+			settings.magicContext = explicitBlackhole && !explicitMagicContext ? false : true;
+			settings.blackhole = !settings.magicContext;
 		}
 	} catch {
 		// Missing or malformed settings use the defaults.
@@ -45,6 +55,13 @@ export function saveFooterSettings(settings: FooterSettings): boolean {
 
 export function formatFooterSettingOption(settings: FooterSettings, definition: FooterSettingDefinition): string {
 	return `${settings[definition.key] ? "✓" : "✗"} ${definition.label}`;
+}
+
+function setFooterSetting(settings: FooterSettings, key: keyof FooterSettings, value: boolean): void {
+	settings[key] = value;
+	if (!value) return;
+	if (key === "blackhole") settings.magicContext = false;
+	if (key === "magicContext") settings.blackhole = false;
 }
 
 export type FooterCommandController = {
@@ -84,7 +101,7 @@ async function openSettings(controller: FooterCommandController, ctx: ExtensionC
 		const definition = FOOTER_SETTING_DEFINITIONS[definitionOptions.indexOf(choice)];
 		if (!definition) continue;
 
-		controller.settings[definition.key] = !controller.settings[definition.key];
+		setFooterSetting(controller.settings, definition.key, !controller.settings[definition.key]);
 		persistSettings(controller, ctx);
 		controller.refreshAndApply(ctx);
 		ctx.ui.notify(`${definition.label}：${controller.settings[definition.key] ? "显示" : "隐藏"}`, "info");
@@ -134,7 +151,7 @@ export function registerFooterCommand(pi: ExtensionAPI, controller: FooterComman
 				return;
 			}
 
-			controller.settings[definition.key] = value ? value === "on" : !controller.settings[definition.key];
+			setFooterSetting(controller.settings, definition.key, value ? value === "on" : !controller.settings[definition.key]);
 			persistSettings(controller, ctx);
 			controller.refreshAndApply(ctx);
 			ctx.ui.notify(`${definition.label}：${controller.settings[definition.key] ? "显示" : "隐藏"}`, "info");

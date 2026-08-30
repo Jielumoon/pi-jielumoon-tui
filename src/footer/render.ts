@@ -7,6 +7,8 @@ import {
 } from "./subscription-usage.ts";
 import {
 	cacheTone,
+	contextTone,
+	sanitizeStatusText,
 	formatCwd,
 	formatDuration,
 	formatTokens,
@@ -105,6 +107,42 @@ function renderBlackholeLine(
 
 	const leftWidth = Math.max(0, width - rightWidth - 1);
 	return `${truncateToWidth(left, leftWidth, theme.fg("dim", "…"))} ${right}`;
+}
+
+const MAGIC_CONTEXT_STATUS_KEY = "magic-context";
+const MAGIC_CONTEXT_STATUS_RE = /^mc:\s+(\S+)\s+\((--|\d+(?:\.\d+)?)%?\)\s+·\s+(.+)$/i;
+
+function renderMagicContextLine(
+	theme: FooterTheme,
+	statusText: string,
+	width: number,
+	currentModel: string | undefined,
+): string {
+	const status = sanitizeStatusText(statusText).replace(/^mc:\s*/i, "").trim();
+	if (!status) return "";
+	const match = MAGIC_CONTEXT_STATUS_RE.exec(`mc: ${status}`);
+	if (!match) return truncateToWidth(`${theme.fg("accent", "✦ MC")} ${status}`, width, theme.fg("dim", "…"));
+
+	const [, tokens, rawPercent, rawState] = match;
+	const percent = rawPercent === "--" ? null : Number(rawPercent);
+	const state = rawState.trim();
+	const isIdle = state.toLowerCase() === "idle";
+	const stateColor: FooterColor = state.startsWith("⚠") ? "error" : isIdle ? "success" : "warning";
+	const percentText = percent === null ? "--" : `${Math.round(percent)}%`;
+	const percentColor: FooterColor = percent === null ? "muted" : contextTone(percent);
+	const model = currentModel && !isIdle
+		? [theme.fg("dim", "·"), theme.fg("muted", currentModel)]
+		: [];
+	const parts = [
+		theme.fg("accent", "✦ MC"),
+		theme.fg("text", tokens ?? "--"),
+		theme.fg("dim", "·"),
+		theme.fg(percentColor, percentText),
+		theme.fg("dim", "·"),
+		theme.fg(stateColor, state),
+		...model,
+	];
+	return truncateToWidth(parts.join(" "), width, theme.fg("dim", "…"));
 }
 
 function modelIdentity(snapshot: FooterSnapshot): string | undefined {
@@ -276,7 +314,7 @@ function renderExtensionStatusLine(
 ): string | null {
 	const entries = Array.from(statuses.entries())
 		.map(([key, text]) => [key, text.replace(/[\r\n\t]/g, " ").replace(/ +/g, " ").trim()] as const)
-		.filter(([key, text]) => Boolean(text) && !isQuietExtensionStatus(key, text));
+		.filter(([key, text]) => key !== MAGIC_CONTEXT_STATUS_KEY && Boolean(text) && !isQuietExtensionStatus(key, text));
 	if (entries.length === 0) return null;
 
 	const separator = softSeparator(theme);
@@ -317,6 +355,12 @@ export function renderFooter(
 	lines.push(...renderStatsLines(theme, snapshot, settings, renderData, icons, width));
 	if (settings.blackhole && snapshot.blackhole) {
 		lines.push(renderBlackholeLine(theme, snapshot.blackhole, icons, width));
+	} else if (settings.magicContext) {
+		const status = renderData.extensionStatuses.get(MAGIC_CONTEXT_STATUS_KEY);
+		if (status) {
+			const magicContextLine = renderMagicContextLine(theme, status, width, modelIdentity(snapshot));
+			if (magicContextLine) lines.push(magicContextLine);
+		}
 	}
 	if (settings.extensions) {
 		const statusLine = renderExtensionStatusLine(theme, renderData.extensionStatuses, width, settings.planning);
