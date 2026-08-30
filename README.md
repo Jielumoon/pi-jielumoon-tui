@@ -2,7 +2,7 @@
 
 一个面向 [Pi](https://github.com/badlogic/pi-mono) coding agent 的 TUI 扩展。
 
-本项目以 [`pi-vibrant-footer`](https://github.com/Jielumoon/pi-vibrant-footer) 为功能基线，保留 Footer、上下文、usage、Blackhole 和设置系统，并以 Sakura Quiet 视觉语言统一消息、工具与工作状态。Thought trail 保持原有 Sakura 树形设计。
+本项目以 [`pi-vibrant-footer`](https://github.com/Jielumoon/pi-vibrant-footer) 为功能基线，保留 Footer、上下文、usage、Blackhole / Magic Context 和设置系统，并以 Sakura Quiet 视觉语言统一消息、工具与工作状态。Thought trail 保持原有 Sakura 树形设计。
 
 ## 特性
 
@@ -11,7 +11,7 @@
 - 第一行以稳定左右锚点展示路径、分支、会话与 Provider、Model、Thinking level
 - 第二行展示输入/输出 token、缓存、费用、订阅额度与会话耗时
 - 上下文使用 8–20 列前景色 compact gauge，不再绘制全宽背景色块或在 Footer 重复百分比
-- Blackhole 有可用快照时始终显示；扩展与 planning 仍仅在活动或异常时增加状态行
+- Blackhole 与 Magic Context 二选一占用同一状态行：默认显示 `✦ MC 140K · 36% · idle`；`historian`、`recomp` 和 `⚠ historian failed` 会追加当前 `provider/model`，Blackhole 有快照时可切回 `BH O/R/P/C`；普通扩展状态与 MC 不重复显示
 - 保留原版 Footer 的显示设置和持久化配置
 - 订阅额度紧跟费用 / `sub`；周窗口统一显示为 `7d`
 
@@ -75,6 +75,23 @@ pi -e /home/jielumoon/opt/projects/pi-tui/pi-jielumoon
 /reload
 ```
 
+### Pi regular 模式闪屏补丁
+
+Pi `regular` 渲染器会把首个变化行到最后变化行之间的稳定行也执行清行重写；当上方工具 spinner 与下方 Working 行同时变化时，这段无效重绘会放大成闪屏。本仓库提供一个独立补丁脚本，让区间内稳定的非图片行只移动光标、不再清空重写。
+
+每次全局更新 Pi 后，在本仓库运行一次：
+
+```bash
+npm run patch:pi-tui-flicker:check
+npm run patch:pi-tui-flicker
+```
+
+- `--check` 只检查，不写文件；正式命令可重复运行，已打补丁时会直接退出。替换阶段会再次核对目标，并在并发出现新目标时拒绝覆盖；请等全局 Pi 更新命令完全结束后再运行，不要和 `npm install -g` 并发执行。
+- 脚本自动寻找全局 `@earendil-works/pi-tui`，也可用 `node scripts/patch-pi-tui-flicker.mjs --target <pi-tui目录或tui-main-screen.js>` 指定非标准安装。
+- 写入前会校验精确源码锚点和补丁后 JavaScript 语法；Pi 上游结构变化时拒绝修改，不做模糊替换。
+- 原文件按版本和 SHA-256 保存在 `~/.pi/agent/patch-backups/pi-tui/`，命令会同时输出目标与备份路径；需要恢复时把该备份复制回目标即可。
+- 补丁只处理 `regular` 模式；`fullscreen` 已有逐行跳过逻辑。当前已运行的 Pi 不会热加载核心模块，应用后需新开 Pi 进程。
+
 ## 命令
 
 加载扩展后，使用 `/jielumoon-tui` 管理 Footer：
@@ -95,6 +112,8 @@ pi -e /home/jielumoon/opt/projects/pi-tui/pi-jielumoon
 /jielumoon-tui planning on           显示右侧计划阶段状态
 /jielumoon-tui planning off          隐藏右侧计划阶段状态
 /jielumoon-tui usage off            隐藏扩展状态与订阅额度
+/jielumoon-tui magic on              显示 Magic Context 状态行
+/jielumoon-tui blackhole on          切换到 Blackhole 状态行
 ```
 
 也可以直接切换单项：
@@ -103,6 +122,7 @@ pi -e /home/jielumoon/opt/projects/pi-tui/pi-jielumoon
 /jielumoon-tui context off
 /jielumoon-tui cache on
 /jielumoon-tui blackhole off
+/jielumoon-tui magic-context off
 /jielumoon-tui plan off
 /jielumoon-tui write-animation off
 ```
@@ -110,7 +130,7 @@ pi -e /home/jielumoon/opt/projects/pi-tui/pi-jielumoon
 其中 `context` 开关直接控制 Editor 下方的 Nano context 紧凑用量条，不再是无效的 Footer 遗留选项。
 
 `tool-bg` 只在 color 模式下生效：底色由对应状态 rail 的马卡龙色相按同一比例压进墨底派生——运行雾蓝、成功雾绿、失败雾玫瑰、取消雾奶油，卡内底色与左侧 rail 呼应，不随宿主主题变化（宿主主题的 `tool*Bg` 质量参差，例如 catppuccin-mocha 是近黑/灰且成功失败同色）。
-也可直接在该 JSON 中设置 `"toolBackground": true`。
+也可直接在该 JSON 中设置 `"toolBackground": true`。`magicContext` 与 `blackhole` 互斥；启用其中一项会自动关闭另一项。旧配置若只显式启用 `blackhole` 会继续保留 Blackhole，未显式选择时默认使用 Magic Context。
 
 `write-animation` 默认开启，仅控制逐字过渡（无光标）；关闭后 Write 仍实时展示末尾 8 个终端显示行。8 KiB 以内的可识别文件自动语法高亮，超过上限时回退纯文本尾部，避免高亮器冻结 TUI。也可在同一 JSON 中设置 `"writeAnimation": false`。plain、screen-reader 与 `NO_COLOR` 模式始终使用静态预览。
 
