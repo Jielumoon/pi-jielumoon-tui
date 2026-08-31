@@ -325,7 +325,7 @@ test("Magic Context replaces the Blackhole row without duplicating its status", 
 });
 
 
-test("Magic Context shows the current model while active or failed", () => {
+test("Magic Context shows its actual subagent model while active or failed", () => {
 	const settings = structuredClone(DEFAULT_FOOTER_SETTINGS);
 	settings.blackhole = false;
 	settings.magicContext = true;
@@ -333,7 +333,11 @@ test("Magic Context shows the current model while active or failed", () => {
 		const lines = renderFooter(
 			snapshot,
 			settings,
-			{ branch: "main", extensionStatuses: new Map([["magic-context", status]]) },
+			{
+				branch: "main",
+				extensionStatuses: new Map([["magic-context", status]]),
+				magicContextModel: "stepfun/step-3.7-flash",
+			},
 			120,
 			theme,
 			icons,
@@ -341,10 +345,10 @@ test("Magic Context shows the current model while active or failed", () => {
 		return lines.find((line) => line.includes("✦ MC")) ?? "";
 	};
 
-	assert.match(renderStatus("mc: 109.2K (54%) · historian"), /historian · openai\/gpt-5/);
-	assert.match(renderStatus("mc: 109.2K (54%) · recomp"), /recomp · openai\/gpt-5/);
-	assert.match(renderStatus("mc: 109.2K (54%) · ⚠ historian failed"), /historian failed · openai\/gpt-5/);
-	assert.doesNotMatch(renderStatus("mc: 109.2K (54%) · idle"), /openai\/gpt-5/);
+	assert.match(renderStatus("mc: 109.2K (54%) · historian"), /historian · stepfun\/step-3\.7-flash/);
+	assert.match(renderStatus("mc: 109.2K (54%) · recomp"), /recomp · stepfun\/step-3\.7-flash/);
+	assert.match(renderStatus("mc: 109.2K (54%) · ⚠ historian failed"), /historian failed · stepfun\/step-3\.7-flash/);
+	assert.doesNotMatch(renderStatus("mc: 109.2K (54%) · idle"), /stepfun\/step-3\.7-flash/);
 	assert.doesNotMatch(renderStatus("mc: 109.2K (54%) · idle\nunsafe"), /\n/);
 });
 

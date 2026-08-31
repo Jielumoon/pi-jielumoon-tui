@@ -8,6 +8,7 @@
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { collectBlackholeStatus } from "./footer/blackhole.ts";
+import { MagicContextModelTracker } from "./footer/magic-context-model.ts";
 import { renderFooter } from "./footer/render.ts";
 import { registerFooterCommand } from "./footer/settings.ts";
 import { getIcons, type FooterSettings, type FooterSnapshot } from "./footer/types.ts";
@@ -28,6 +29,7 @@ export default function vibrantFooter(
 	let snapshot: FooterSnapshot | undefined;
 	let refreshTimer: ReturnType<typeof setInterval> | undefined;
 	let requestRender: (() => void) | undefined;
+	let magicContextModelTracker: MagicContextModelTracker | undefined;
 
 	type SnapshotRefreshOptions = {
 		usage?: boolean;
@@ -74,6 +76,7 @@ export default function vibrantFooter(
 		if (ctx.mode !== "tui") return;
 
 		if (!enabled) {
+			magicContextModelTracker?.observeStatus(undefined);
 			requestRender = undefined;
 			ctx.ui.setFooter(undefined);
 			return;
@@ -97,12 +100,17 @@ export default function vibrantFooter(
 				invalidate() {},
 				render(width: number): string[] {
 					if (!snapshot) return [];
+					const extensionStatuses = footerData.getExtensionStatuses();
+					const magicContextModel = magicContextModelTracker?.observeStatus(
+						settings.magicContext ? extensionStatuses.get("magic-context") : undefined,
+					);
 					return renderFooter(
 						snapshot,
 						settings,
 						{
 							branch: footerData.getGitBranch(),
-							extensionStatuses: footerData.getExtensionStatuses(),
+							extensionStatuses,
+							magicContextModel,
 							subscriptionUsage: subscriptionUsage?.getState(),
 						},
 						width,
@@ -123,6 +131,11 @@ export default function vibrantFooter(
 		sessionStartMs = Date.now();
 		usageCollector.reset();
 		snapshot = undefined;
+		magicContextModelTracker?.dispose();
+		magicContextModelTracker = new MagicContextModelTracker(
+			ctx.sessionManager.getSessionId(),
+			() => requestRender?.(),
+		);
 		refreshSnapshot(ctx);
 		applyFooter(ctx);
 		startRefreshLoop(ctx);
@@ -147,6 +160,8 @@ export default function vibrantFooter(
 
 	pi.on("session_shutdown", (_event, ctx) => {
 		stopRefreshLoop();
+		magicContextModelTracker?.dispose();
+		magicContextModelTracker = undefined;
 		usageCollector.reset();
 		requestRender = undefined;
 		activeContext = undefined;

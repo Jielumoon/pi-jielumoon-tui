@@ -116,7 +116,7 @@ function renderMagicContextLine(
 	theme: FooterTheme,
 	statusText: string,
 	width: number,
-	currentModel: string | undefined,
+	magicContextModel: string | undefined,
 ): string {
 	const status = sanitizeStatusText(statusText).replace(/^mc:\s*/i, "").trim();
 	if (!status) return "";
@@ -130,8 +130,9 @@ function renderMagicContextLine(
 	const stateColor: FooterColor = state.startsWith("⚠") ? "error" : isIdle ? "success" : "warning";
 	const percentText = percent === null ? "--" : `${Math.round(percent)}%`;
 	const percentColor: FooterColor = percent === null ? "muted" : contextTone(percent);
-	const model = currentModel && !isIdle
-		? [theme.fg("dim", "·"), theme.fg("muted", currentModel)]
+	const modelText = sanitizeStatusText(magicContextModel ?? "");
+	const model = modelText && !isIdle
+		? [theme.fg("dim", "·"), theme.fg("muted", modelText)]
 		: [];
 	const parts = [
 		theme.fg("accent", "✦ MC"),
@@ -358,7 +359,7 @@ export function renderFooter(
 	} else if (settings.magicContext) {
 		const status = renderData.extensionStatuses.get(MAGIC_CONTEXT_STATUS_KEY);
 		if (status) {
-			const magicContextLine = renderMagicContextLine(theme, status, width, modelIdentity(snapshot));
+			const magicContextLine = renderMagicContextLine(theme, status, width, renderData.magicContextModel);
 			if (magicContextLine) lines.push(magicContextLine);
 		}
 	}

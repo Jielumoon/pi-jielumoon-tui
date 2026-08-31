@@ -131,6 +131,7 @@ npm run patch:pi-tui-flicker
 
 `tool-bg` 只在 color 模式下生效：底色由对应状态 rail 的马卡龙色相按同一比例压进墨底派生——运行雾蓝、成功雾绿、失败雾玫瑰、取消雾奶油，卡内底色与左侧 rail 呼应，不随宿主主题变化（宿主主题的 `tool*Bg` 质量参差，例如 catppuccin-mocha 是近黑/灰且成功失败同色）。
 也可直接在该 JSON 中设置 `"toolBackground": true`。`magicContext` 与 `blackhole` 互斥；启用其中一项会自动关闭另一项。旧配置若只显式启用 `blackhole` 会继续保留 Blackhole，未显式选择时默认使用 Magic Context。
+Magic Context 在 `historian`、`recomp` 和失败态后显示其实际子进程模型，而不是当前主会话模型；模型来自当前 MC 会话日志与运行中子进程，无法确认时直接省略，`idle` 始终不显示模型。
 
 `write-animation` 默认开启，仅控制逐字过渡（无光标）；关闭后 Write 仍实时展示末尾 8 个终端显示行。8 KiB 以内的可识别文件自动语法高亮，超过上限时回退纯文本尾部，避免高亮器冻结 TUI。也可在同一 JSON 中设置 `"writeAnimation": false`。plain、screen-reader 与 `NO_COLOR` 模式始终使用静态预览。
 

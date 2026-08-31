@@ -4,7 +4,7 @@
 
 这是 TypeScript 原生 ESM 的 Pi TUI 扩展。`package.json` 的 `pi.extensions` 只暴露 `./src/index.ts`，由它统一注册：
 
-- `src/vibrant-footer.ts` + `src/footer/`：Footer 生命周期、渲染、设置、会话 usage、Blackhole / Magic Context 状态行，以及自研 `subscription-usage.ts`（Codex / Anthropic / OpenRouter / xAI）
+- `src/vibrant-footer.ts` + `src/footer/`：Footer 生命周期、渲染、设置、会话 usage、Blackhole / Magic Context 状态行；`magic-context-model.ts` 只从当前会话日志与运行中子进程读取 MC 实际模型；`subscription-usage.ts` 自研 Codex / Anthropic / OpenRouter / xAI 用量
 - `src/nano-context.ts`：上下文用量彩条
 - `src/thinking.ts`、`src/thinking-message.ts`：Thought trail
 - `src/message-borders.ts`：用户消息、工具和 Bash 卡片样式；运行中卡片标题带实时秒表（≥1s 显示，随标题 spinner 帧更新，不扩大重绘范围）
