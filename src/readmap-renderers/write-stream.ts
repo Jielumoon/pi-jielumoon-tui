@@ -141,8 +141,10 @@ export function renderWritePreviewLines(
 	const normalizedWidth = normalizeWidth(width);
 	const nextCache = updateWriteHighlightCache(cache, content, path, presentation);
 	if (content.length === 0) {
-		// 流式尚未揭示任何内容时不放占位文案，避免"empty file"闪现。
-		if (pending) return { lines: [], cache: nextCache };
+		// 流式尚未揭示任何内容时不放占位文案，避免"empty file"闪现；但保持折叠高度固定。
+		if (pending) {
+			return { lines: Array.from({ length: WRITE_COLLAPSED_DISPLAY_LINES }, () => ""), cache: nextCache };
+		}
 		const empty = presentation.mode === "screen-reader"
 			? "empty file"
 			: styleText(presentation, "dim", "empty file");
@@ -172,7 +174,12 @@ export function renderWritePreviewLines(
 		const start = Math.max(0, layout.segments.length - remaining);
 		lines.unshift(...materializeWriteLine(layout, start));
 	}
-	return { lines: clampLines(lines.slice(-WRITE_COLLAPSED_DISPLAY_LINES), normalizedWidth), cache: nextCache };
+	const collapsed = lines.slice(-WRITE_COLLAPSED_DISPLAY_LINES);
+	// 流式动画期间固定折叠预览高度：内容不足时补空行，避免逐字揭示让边框逐帏长高而闪烁。
+	if (pending) {
+		while (collapsed.length < WRITE_COLLAPSED_DISPLAY_LINES) collapsed.push("");
+	}
+	return { lines: clampLines(collapsed, normalizedWidth), cache: nextCache };
 }
 
 export class WriteCallComponent implements Component {

@@ -83,7 +83,7 @@ function tintEntry(presentation: RenderPresentation, entry: DiffEntry, text: str
 	return styleText(presentation, "toolOutput", text);
 }
 
-function renderDiffLines(
+export function renderDiffLines(
 	diffData: DiffData,
 	theme: ThemeLike | undefined,
 	width: number,

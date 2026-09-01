@@ -160,14 +160,18 @@ test("edit call animates incrementally and flushes when args complete", () => {
 	const initialLines = component.render(80);
 	const initial = stripAnsi(initialLines.join("\n"));
 	assert.match(initial, /Edit.*live\.ts.*1 edit/);
-	assert.equal(initialLines.length, 1, "nothing revealed yet: header only, no cursor row");
+	assert.equal(
+		initialLines.length,
+		9,
+		"streaming preview keeps a fixed height: header + 8 padded rows, border never grows",
+	);
 	assert.doesNotMatch(initial, /replace/, "label text must not be revealed before animation advances");
 
 	assert.equal(component.advanceAnimation(), true, "backlog should keep the animation alive");
 	assert.equal(invalidations, 1, "advance must invalidate the row");
 	// 目标 15 字符、追赶 6 tick：一次推进揭示 ceil(15/6)=3 个字符。
 	const advanced = stripAnsi(component.render(80).join("\n"));
-	assert.match(advanced, /┄ rep$/, "label prefix should reveal progressively");
+	assert.match(advanced, /┄ rep$/m, "label prefix should reveal progressively");
 	assert.doesNotMatch(advanced, /▏/, "reveal must not draw a cursor");
 
 	const complete = tool.renderCall?.(args, theme, {

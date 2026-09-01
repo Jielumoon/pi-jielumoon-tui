@@ -194,9 +194,15 @@ export function renderEditPreviewLines(
 	presentation: RenderPresentation,
 	width: number,
 	expanded: boolean,
+	pending = false,
 ): { lines: string[]; truncated: boolean } {
 	const w = normalizeWidth(width);
-	if (targetLines.length === 0) return { lines: [], truncated: false };
+	// 流式期间空态也保持折叠高度，避免边框从未知行数跳到 9 行。
+	const paddedPending = (): { lines: string[]; truncated: boolean } => ({
+		lines: Array.from({ length: EDIT_COLLAPSED_DISPLAY_LINES }, () => ""),
+		truncated: false,
+	});
+	if (targetLines.length === 0) return pending && !expanded ? paddedPending() : { lines: [], truncated: false };
 
 	// revealed 是 targetText 的字符前缀，因此第 i 行必与 targetLines[i] 对齐（末行可为部分前缀）。
 	const revealedLines = revealed.split("\n");
@@ -205,7 +211,7 @@ export function renderEditPreviewLines(
 	const renderable = lastRevealed === "" && (targetLines[revealedLines.length - 1]?.text ?? "") !== ""
 		? revealedLines.slice(0, -1)
 		: revealedLines;
-	if (renderable.length === 0) return { lines: [], truncated: false };
+	if (renderable.length === 0) return pending && !expanded ? paddedPending() : { lines: [], truncated: false };
 	const rowsAt = (index: number, maxTailRows?: number): string[] => editStreamRows(
 		renderable[index] ?? "",
 		targetLines[index]?.kind ?? "add",
@@ -230,7 +236,13 @@ export function renderEditPreviewLines(
 		if (segments.length > remaining) truncated = true;
 		rows.unshift(...segments.slice(-remaining));
 	}
-	return { lines: clampLines(rows.slice(-EDIT_COLLAPSED_DISPLAY_LINES), w), truncated };
+	const collapsed = rows.slice(-EDIT_COLLAPSED_DISPLAY_LINES);
+	// 流式动画期间固定折叠预览高度：内容不足时补空行，避免逐字揭示让边框逐帏长高而闪烁。
+	if (pending && collapsed.length < EDIT_COLLAPSED_DISPLAY_LINES) {
+		truncated = collapsed.length > 0 || renderable.length < targetLines.length;
+		while (collapsed.length < EDIT_COLLAPSED_DISPLAY_LINES) collapsed.push("");
+	}
+	return { lines: clampLines(collapsed, w), truncated };
 }
 
 export class EditCallComponent implements Component {
@@ -313,6 +325,7 @@ export class EditCallComponent implements Component {
 			this.presentation,
 			normalizedWidth,
 			this.expanded,
+			this.animationEnabled,
 		);
 		const header = renderToolHeader(
 			"edit",

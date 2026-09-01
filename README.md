@@ -29,6 +29,7 @@
 - 工具框默认剥离 Pi 默认背景色；可通过“工具状态底色”开关恢复按运行状态变化的主题底色，Read 和图片旁路保持无底色
 - Read 默认单行；Edit 流式期间逐字展示伪 diff（操作标签 + 红减绿加），完成后换真实 diff；Write 真实跟随参数流自适应逐字显示，默认保留末尾 8 个终端行，常规内容自动语法高亮、超大内容安全回退纯文本；Bash 成功显示尾部摘要、失败保留错误 rail；Ctrl+O 展开完整内容
 - Grep / Find（pi 核心工具）同样进 Sakura 卡片：grep 按文件分组、行号右对齐、匹配词高亮、折叠保留 6 个匹配；find 复用 ls 双列条目排版、目录带 `▸`、折叠 8 条；header 展示 `/pattern/ in path` 与 glob/-i/limit 等 meta
+- Apply_patch（@xl0/pi-lovely-codex，GPT/Codex 模型）同样进 Sakura 卡片：流式期间着色预览信封尾部 8 行，完成后按 `details.patch` 渲染逐文件 unified diff（header 带 `+N −N` 统计与文件数），折叠态每文件保留 6 行 diff、最多展开 3 个文件
 - 运行中卡片标题自带实时秒表：运行满 1s 后显示 `· 5s` / `· 1m 5s`，bash 长命令自动截短保住秒表与 exit meta
 - 助手正文与 Thought trail 保持干净的无包围框布局
 

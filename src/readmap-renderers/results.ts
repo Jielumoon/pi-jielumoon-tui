@@ -1,9 +1,10 @@
-/** read / edit / write / bash / ls / grep / find 的调用行与结果渲染；只产内容，不画外框。 */
+/** read / edit / write / bash / ls / grep / find / apply_patch 的调用行与结果渲染；只产内容，不画外框。 */
 
 import { truncateToWidth, Text, visibleWidth, wrapTextWithAnsi, type Component } from "@earendil-works/pi-tui";
 import { asRecord } from "../guards.ts";
+import { parseUnifiedPatch } from "./apply-patch.ts";
 import { reuseOrCreateText, reuseOrCreateWidthAware } from "./components.ts";
-import { isDiffData, reuseOrCreateDiff } from "./diff.ts";
+import { isDiffData, renderDiffLines, reuseOrCreateDiff } from "./diff.ts";
 import { EditCallComponent, reuseOrCreateEditCall } from "./edit-stream.ts";
 import { formatLineRange, renderToolHeader } from "./header.ts";
 import {
@@ -42,6 +43,10 @@ const BASH_SHORT_MAX_CHARS = 2_000;
 const BASH_COLLAPSED_PREVIEW_LINES = 4;
 /** ls 折叠态最多展示的目录条目。 */
 const LS_COLLAPSED_PREVIEW_ENTRIES = 8;
+/** apply_patch 信封流式预览的尾部行数，与 write 预览行数对齐。 */
+const APPLY_PATCH_PREVIEW_LINES = 8;
+/** apply_patch 折叠态最多逐个渲染的文件数，其余汇总成提示行。 */
+const APPLY_PATCH_COLLAPSED_FILES = 3;
 /** grep 折叠态最多展示的匹配数（文件分组行不计入）。 */
 const GREP_COLLAPSED_PREVIEW_MATCHES = 6;
 /** find 折叠态最多展示的结果条目。 */
@@ -117,22 +122,113 @@ export function renderToolCall(
 	if (name === "write") {
 		if (context.isPartial === false) {
 			if (context.lastComponent instanceof WriteCallComponent) context.lastComponent.stop();
-			return new Text("", 0, 0);
+			return reuseOrCreateText(context.lastComponent, "");
 		}
 		return reuseOrCreateWriteCall(context.lastComponent, args, presentation, context, settings);
 	}
 	if (name === "edit") {
 		if (context.isPartial === false) {
 			if (context.lastComponent instanceof EditCallComponent) context.lastComponent.stop();
-			return new Text("", 0, 0);
+			return reuseOrCreateText(context.lastComponent, "");
 		}
 		return reuseOrCreateEditCall(context.lastComponent, args, presentation, context, settings);
+	}
+	if (name === "apply_patch") {
+		return renderApplyPatchCall(args, theme, context);
 	}
 	if (context.isPartial === false) return reuseOrCreateText(context.lastComponent, "");
 	return reuseOrCreateText(
 		context.lastComponent,
 		renderToolHeader(name, args, presentation, context, { phase: "running" }),
 	);
+}
+
+// ─── apply_patch ────────────────────────────────────────────────
+
+/** 补丁信封行的预览着色：`***` 头 / hunk / +/- / 上下文，其余 muted；screen-reader 加语义标签。 */
+function stylePatchLine(line: string, presentation: RenderPresentation): string {
+	const text = displayText(line, presentation);
+	if (presentation.mode === "screen-reader") {
+		if (line.startsWith("+")) return `added: ${text}`;
+		if (line.startsWith("-")) return `removed: ${text}`;
+		if (line.startsWith("@@")) return `hunk: ${text}`;
+		if (line.startsWith("*** ")) return `patch: ${text}`;
+		if (line.startsWith(" ")) return `context: ${text}`;
+		return text;
+	}
+	if (line.startsWith("*** ")) return styleText(presentation, "syntaxType", text);
+	if (line.startsWith("@@")) return styleText(presentation, "muted", text);
+	if (line.startsWith("+")) return styleText(presentation, "toolDiffAdded", text);
+	if (line.startsWith("-")) return styleText(presentation, "toolDiffRemoved", text);
+	if (line.startsWith(" ")) return styleText(presentation, "dim", text);
+	return styleText(presentation, "muted", text);
+}
+
+/** apply_patch 参数流预览：header + 信封尾部着色行；参数完成后清空等待结果。 */
+export function renderApplyPatchCall(
+	args: unknown,
+	theme: ThemeLike | undefined,
+	context: RenderContextLike,
+): Component {
+	const presentation = resolvePresentation(theme);
+	if (context.isPartial === false) return reuseOrCreateText(context.lastComponent, "");
+	const record = asRecord(args);
+	const input = typeof record?.input === "string" ? record.input : "";
+	const lines = displayText(input, presentation).split("\n");
+	const visible = lines.slice(-APPLY_PATCH_PREVIEW_LINES);
+	// 流式期间固定预览高度：内容不足时补空行，避免边框逐帏长高而闪烁。
+	while (visible.length < APPLY_PATCH_PREVIEW_LINES) visible.push("");
+	const header = renderToolHeader("apply_patch", args, presentation, context, { phase: "running" });
+	return reuseOrCreateWidthAware(context.lastComponent, (width) => [
+		header,
+		...visible.map((line) => clampLine(stylePatchLine(line, presentation), width)),
+	]);
+}
+
+/** apply_patch 结果：details.patch（标准 unified diff）→ 逐文件 DiffData；失败走错误壳。 */
+export function renderApplyPatchResult(
+	result: ToolResultLike,
+	options: RenderOptionsLike,
+	theme: ThemeLike | undefined,
+	context: RenderContextLike,
+): Component {
+	const p = resolvePresentation(theme);
+	if (context.isPartial || options.isPartial) return reuseOrCreateText(context.lastComponent, "");
+
+	const body = textOf(result, p);
+	if (context.isError || result.isError) {
+		return renderToolError("apply_patch", body || "apply_patch failed", options, p, context, [], 6);
+	}
+
+	const details = asRecord(result.details);
+	const files = typeof details?.patch === "string"
+		? parseUnifiedPatch(displayText(details.patch, p))
+		: [];
+	const added = files.reduce((sum, file) => sum + file.diffData.stats.added, 0);
+	const removed = files.reduce((sum, file) => sum + file.diffData.stats.removed, 0);
+	const expanded = isExpanded(options, context);
+	const header = renderToolHeader("apply_patch", context.args, p, context, {
+		phase: "success",
+		meta: [
+			...(files.length > 0 ? [`+${added} −${removed}`] : []),
+			...(files.length > 1 ? [`${files.length} files`] : []),
+		],
+	});
+	if (files.length === 0) return reuseOrCreateText(context.lastComponent, header);
+	// 折叠态限制渲染的文件数，避免大补丁把 TUI 刷穿；展开态与 bash/read 一样全量。
+	const shown = expanded ? files : files.slice(0, APPLY_PATCH_COLLAPSED_FILES);
+	return reuseOrCreateWidthAware(context.lastComponent, (width) => [
+		header,
+		...shown.flatMap((file) => [
+			...(files.length > 1
+				? [clampLine(styleText(p, "syntaxType", displayText(file.path, p)), width)]
+				: []),
+			...renderDiffLines(file.diffData, theme, width, expanded, p),
+		]),
+		...(shown.length < files.length
+			? [clampLine(collapsedHint(shown.length, files.length, "files", true, p), width)]
+			: []),
+	]);
 }
 
 // ─── result renderers ────────────────────────────────────────────
@@ -212,7 +308,15 @@ export function renderReadResult(
 		meta.push(...warningBadges(ptc.warnings));
 	} else {
 		const count = body.length === 0 ? 0 : body.split("\n").length;
-		meta.push(`${count} ${count === 1 ? "line" : "lines"}`);
+		const native = asRecord(details?.truncation);
+		if (native?.truncated === true) {
+			// pi 原生 read 截断：优先用截断元数据，取不到再退回正文行数。
+			const shown = typeof native.outputLines === "number" ? native.outputLines : count;
+			const total = typeof native.totalLines === "number" ? native.totalLines : shown;
+			meta.push(`${shown}/${total} lines`, "truncated");
+		} else {
+			meta.push(`${count} ${count === 1 ? "line" : "lines"}`);
+		}
 	}
 
 	const header = renderToolHeader("read", context.args, p, context, {
@@ -254,17 +358,28 @@ export function renderEditResult(
 		return reuseOrCreateText(context.lastComponent, expanded && body ? `${header}\n${styleText(p, "dim", body)}` : header);
 	}
 
+	// pi 原生 edit 无 diffData，但结果带 unified patch（details.patch），解析后同一套 DiffBody 渲染。
+	const patchText = typeof details.patch === "string" && details.patch.length > 0 ? details.patch : undefined;
 	const diffData = isDiffData(details.diffData)
 		? details.diffData
 		: isDiffData(ptc?.diffData)
 			? ptc.diffData
-			: undefined;
-	const stats = diffData?.stats ?? { added: 0, removed: 0 };
+			: patchText !== undefined
+				? parseUnifiedPatch(displayText(patchText, p))[0]?.diffData
+				: undefined;
+	const meta = [
+		...(diffData ? [`+${diffData.stats.added} −${diffData.stats.removed}`] : []),
+		classification ?? "",
+		...warnings,
+	];
 	const header = renderToolHeader("edit", context.args, p, context, {
 		phase: "success",
-		meta: [`+${stats.added} −${stats.removed}`, classification ?? "", ...warnings],
+		meta,
 	});
-	if (!diffData) return reuseOrCreateText(context.lastComponent, header);
+	if (!diffData) {
+		// 未知结果格式（如第三方同名 edit 的 details.diff）没有 diff 来源，退回展示成功正文。
+		return reuseOrCreateText(context.lastComponent, expanded && body ? `${header}\n${styleText(p, "dim", body)}` : header);
+	}
 	return reuseOrCreateDiff(context.lastComponent, {
 		prefixLines: [header],
 		diffData,

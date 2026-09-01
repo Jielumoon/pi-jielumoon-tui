@@ -116,6 +116,20 @@ test("core tool bridge patches session definitions through getRenderShell", () =
 	assert.equal(prototype.getRenderShell.call(findReceiver), "self");
 	assert.equal(builtInFind[READMAP_RENDERER_MARK], true);
 
+	// pi 原生形状的目标工具同样被桥接接管：write 原生无 renderShell，edit 原生是 "self"
+	const nativeWrite = makeTool("write");
+	const writeReceiver = { toolName: "write", toolDefinition: nativeWrite, builtInToolDefinition: undefined };
+	assert.equal(prototype.getRenderShell.call(writeReceiver), "self");
+	assert.equal(nativeWrite[READMAP_RENDERER_MARK], true);
+	assert.notEqual(nativeWrite.renderCall, undefined);
+
+	const nativeEdit = makeTool("edit");
+	nativeEdit.renderShell = "self";
+	const editReceiver = { toolName: "edit", toolDefinition: nativeEdit, builtInToolDefinition: undefined };
+	assert.equal(prototype.getRenderShell.call(editReceiver), "self");
+	assert.equal(nativeEdit[READMAP_RENDERER_MARK], true);
+	assert.notEqual(nativeEdit.renderCall, undefined);
+
 	// 非目标工具原样透传
 	const todo = makeTool("todo");
 	const todoRenderCall = todo.renderCall;

@@ -1251,12 +1251,16 @@ test("write call animates incrementally and flushes when args complete", () => {
 	const initialLines = component.render(80);
 	const initial = stripAnsi(initialLines.join("\n"));
 	assert.match(initial, /Write.*live\.ts.*0 lines/);
-	assert.equal(initialLines.length, 1, "nothing revealed yet: header only, no placeholder row");
+	assert.equal(
+		initialLines.length,
+		9,
+		"streaming preview keeps a fixed height: header + 8 padded rows, border never grows",
+	);
 	assert.doesNotMatch(initial, /abc|empty file/);
 
 	assert.equal(component.advanceAnimation(), true);
 	assert.equal(invalidations, 1);
-	assert.match(stripAnsi(component.render(80).join("\n")), /1 │ a$/, "first character reveals without a cursor");
+	assert.match(stripAnsi(component.render(80).join("\n")), /1 │ a$/m, "first character reveals without a cursor");
 
 	const complete = tool.renderCall?.(
 		{ path: "src/live.ts", content: "abc" },
@@ -1287,8 +1291,8 @@ test("parallel write calls keep independent animation state", () => {
 	assert.notEqual(left, right);
 	left.advanceAnimation();
 	right.advanceAnimation();
-	assert.match(stripAnsi(left.render(80).join("\n")), /1 │ l$/);
-	assert.match(stripAnsi(right.render(80).join("\n")), /1 │ r$/);
+	assert.match(stripAnsi(left.render(80).join("\n")), /1 │ l$/m);
+	assert.match(stripAnsi(right.render(80).join("\n")), /1 │ r$/m);
 	assert.doesNotMatch(stripAnsi(left.render(80).join("\n")), /right/);
 	assert.doesNotMatch(stripAnsi(right.render(80).join("\n")), /left/);
 	left.stop();
@@ -1317,8 +1321,8 @@ test("shared write timer isolates a failing component", (t) => {
 	try {
 		assert.doesNotThrow(() => t.mock.timers.tick(40), "shared tick must survive a throwing invalidate");
 		assert.equal(rightInvalidations, 1, "healthy component should keep animating after a peer fails");
-		assert.match(stripAnsi(left.render(80).join("\n")), /1 │ l$/, "failed component freezes at its last reveal");
-		assert.match(stripAnsi(right.render(80).join("\n")), /1 │ r$/, "healthy component keeps revealing content");
+		assert.match(stripAnsi(left.render(80).join("\n")), /1 │ l$/m, "failed component freezes at its last reveal");
+		assert.match(stripAnsi(right.render(80).join("\n")), /1 │ r$/m, "healthy component keeps revealing content");
 	} finally {
 		left.stop();
 		right.stop();
@@ -1755,4 +1759,339 @@ test("theme fg throw falls back to plain text", () => {
 test("clampLine never exceeds width", () => {
 	const line = clampLine("hello world ".repeat(20), 40);
 	assert.ok(visibleWidth(line) <= 40, "clampLine must not exceed the requested width");
+});
+
+test("apply_patch joins the readmap target set via the component bridge", () => {
+	assert.deepEqual(patchToolPayload({ apply_patch: makeTool("apply_patch") }), ["apply_patch"]);
+});
+
+test("apply_patch call previews the envelope tail and clears when args complete", () => {
+	const tool = makeTool("apply_patch");
+	patchReadmapTool(tool);
+	const input = [
+		"*** Begin Patch",
+		"*** Update File: src/a.ts",
+		"@@",
+		" keep",
+		"-old",
+		"+new",
+		"*** End Patch",
+	].join("\n");
+
+	const partial = tool.renderCall?.(
+		{ input },
+		theme,
+		{ isPartial: true },
+	) as { render: (w: number) => string[] };
+	const partialText = stripAnsi(partial.render(80).join("\n"));
+	assert.match(partialText, /Apply_patch/);
+	assert.match(partialText, /src\/a\.ts/);
+	assert.match(partialText, /\+new/);
+	assert.match(partialText, /-old/);
+	assert.ok(partial.render(80).length <= 9, "preview stays within header + 8 tail lines");
+
+	const done = tool.renderCall?.(
+		{ input },
+		theme,
+		{ isPartial: false },
+	) as { render: (w: number) => string[] };
+	assert.equal(stripAnsi(done.render(80).join("\n")), "");
+});
+
+test("apply_patch result renders the unified diff with stats and header path", () => {
+	const tool = makeTool("apply_patch");
+	patchReadmapTool(tool);
+	const component = tool.renderResult?.(
+		{
+			content: [{ type: "text", text: "Success. Updated the following files:\nM src/a.ts" }],
+			details: {
+				exitCode: 0,
+				patch: [
+					"--- src/a.ts",
+					"+++ src/a.ts",
+					"@@ -1,3 +1,3 @@",
+					" keep",
+					"-old line2",
+					"+new line2",
+					" keep2",
+				].join("\n"),
+			},
+		},
+		{ expanded: true },
+		theme,
+		{ args: { input: "*** Begin Patch\n*** Update File: src/a.ts\n@@\n-old line2\n+new line2\n*** End Patch" } },
+	) as { render: (w: number) => string[] };
+
+	const text = stripAnsi(component.render(80).join("\n"));
+	assert.match(text, /Apply_patch/);
+	assert.match(text, /src\/a\.ts/);
+	assert.match(text, /\+1 −1/);
+	assert.match(text, /new line2/);
+	assert.match(text, /old line2/);
+	for (const width of [40, 60, 80, 120, 160]) {
+		assertNoOverflow(component.render(width), width);
+	}
+});
+
+test("apply_patch result renders multiple files with separators", () => {
+	const tool = makeTool("apply_patch");
+	patchReadmapTool(tool);
+	const patch = [
+		"--- src/a.ts",
+		"+++ src/a.ts",
+		"@@ -1 +1 @@",
+		"-a1",
+		"+a2",
+		"--- src/b.ts",
+		"+++ src/b.ts",
+		"@@ -1 +1 @@",
+		"-b1",
+		"+b2",
+	].join("\n");
+	const component = tool.renderResult?.(
+		{
+			content: [{ type: "text", text: "Success." }],
+			details: { exitCode: 0, patch },
+		},
+		{ expanded: true },
+		theme,
+		{ args: { input: "*** Begin Patch\n*** Update File: src/a.ts\n*** Update File: src/b.ts\n*** End Patch" } },
+	) as { render: (w: number) => string[] };
+
+	const text = stripAnsi(component.render(80).join("\n"));
+	assert.match(text, /2 files/);
+	assert.match(text, /a2/);
+	assert.match(text, /b2/);
+	// 两个文件路径行都在正文里
+	assert.ok(text.includes("src/a.ts") && text.includes("src/b.ts"));
+});
+
+test("apply_patch error and missing-patch paths fall back safely", () => {
+	const tool = makeTool("apply_patch");
+	patchReadmapTool(tool);
+
+	const failed = tool.renderResult?.(
+		{ content: [{ type: "text", text: "apply_patch failed\nPartial changes:\n- x" }], isError: true },
+		{ expanded: false },
+		theme,
+		{},
+	) as { render: (w: number) => string[] };
+	assert.match(stripAnsi(failed.render(80).join("\n")), /apply_patch failed/);
+
+	const noPatch = tool.renderResult?.(
+		{ content: [{ type: "text", text: "Success." }], details: { exitCode: 0 } },
+		{ expanded: false },
+		theme,
+		{ args: { input: "" } },
+	) as { render: (w: number) => string[] };
+	const noPatchText = stripAnsi(noPatch.render(80).join("\n"));
+	assert.match(noPatchText, /Apply_patch/);
+	assert.ok(!noPatchText.includes("−"), "no diff stats without a patch");
+});
+
+test("apply_patch parser keeps hunk content lines that mimic file headers", () => {
+	const tool = makeTool("apply_patch");
+	patchReadmapTool(tool);
+	// 被删的 `-- x` 编码成 `--- x`、新增 `++ x` 编码成 `+++ x`，配额归零前都是内容行。
+	const patch = [
+		"--- src/a.md",
+		"+++ src/a.md",
+		"@@ -1,4 +1,4 @@",
+		" ctx",
+		"--- dash content",
+		"+++ plus content",
+		" tail",
+	].join("\n");
+	const component = tool.renderResult?.(
+		{ content: [{ type: "text", text: "Success." }], details: { exitCode: 0, patch } },
+		{ expanded: true },
+		theme,
+		{ args: { input: "*** Begin Patch\n*** Update File: src/a.md\n*** End Patch" } },
+	) as { render: (w: number) => string[] };
+	const text = stripAnsi(component.render(80).join("\n"));
+	assert.match(text, /dash content/, "removed `-- x` content line must stay in the diff");
+	assert.match(text, /plus content/, "added `++ x` content line must stay in the diff");
+	assert.equal(text.split("src/a.md").length - 1, 1, "single file renders one path mention");
+});
+
+test("apply_patch parser handles new-file hunks and no-newline markers", () => {
+	const tool = makeTool("apply_patch");
+	patchReadmapTool(tool);
+	const patch = [
+		"--- src/new.ts",
+		"+++ src/new.ts",
+		"@@ -0,0 +1,2 @@",
+		"+line one",
+		"+line two",
+		"\\ No newline at end of file",
+	].join("\n");
+	const component = tool.renderResult?.(
+		{ content: [{ type: "text", text: "Success." }], details: { exitCode: 0, patch } },
+		{ expanded: true },
+		theme,
+		{ args: { input: "*** Begin Patch\n*** Add File: src/new.ts\n*** End Patch" } },
+	) as { render: (w: number) => string[] };
+	const text = stripAnsi(component.render(80).join("\n"));
+	assert.match(text, /line one/);
+	assert.match(text, /line two/);
+	assert.match(text, /\+2 −0/);
+});
+
+test("apply_patch header covers Move to rename targets", () => {
+	const tool = makeTool("apply_patch");
+	patchReadmapTool(tool);
+	const call = tool.renderCall?.(
+		{ input: "*** Begin Patch\n*** Update File: src/old.ts\n*** Move to: src/new.ts\n*** End Patch" },
+		theme,
+		{ isPartial: true },
+	) as { render: (w: number) => string[] };
+	const text = stripAnsi(call.render(80).join("\n"));
+	assert.match(text, /src\/old\.ts/, "header keeps the primary touched path");
+	assert.match(text, /2 files/, "Move to target counts as a touched file");
+});
+
+test("apply_patch collapsed result caps rendered files with a hint", () => {
+	const tool = makeTool("apply_patch");
+	patchReadmapTool(tool);
+	const filePatch = (name: string, marker: string) => [
+		`--- ${name}`,
+		`+++ ${name}`,
+		"@@ -1 +1 @@",
+		"-before",
+		`+${marker}`,
+	].join("\n");
+	const patch = ["a.ts", "b.ts", "c.ts", "d.ts"]
+		.map((name, index) => filePatch(name, `marker-${index}`))
+		.join("\n");
+	const component = tool.renderResult?.(
+		{ content: [{ type: "text", text: "Success." }], details: { exitCode: 0, patch } },
+		{ expanded: false },
+		theme,
+		{ args: { input: "" } },
+	) as { render: (w: number) => string[] };
+	const text = stripAnsi(component.render(80).join("\n"));
+	assert.match(text, /4 files/);
+	assert.match(text, /1 more file/, "collapsed state caps rendered files");
+	assert.ok(!text.includes("marker-3"), "fourth file content stays hidden while collapsed");
+});
+
+test("apply_patch screen-reader preview labels patch lines", () => {
+	withEnv("PI_READMAP_RENDER_MODE", "screen-reader", () => {
+		const tool = makeTool("apply_patch");
+		patchReadmapTool(tool);
+		const call = tool.renderCall?.(
+			{ input: "*** Begin Patch\n*** Update File: s.ts\n@@\n ctx\n-old\n+new" },
+			theme,
+			{ isPartial: true },
+		) as { render: (w: number) => string[] };
+		const text = call.render(80).join("\n");
+		assert.match(text, /added: \+new/);
+		assert.match(text, /removed: -old/);
+		assert.match(text, /context:  ctx/);
+		assert.match(text, /patch: /);
+	});
+});
+
+test("edit result renders pi-native details.patch when diffData is absent", () => {
+	const tool = makeTool("edit");
+	patchReadmapTool(tool);
+	const component = tool.renderResult?.(
+		{
+			content: [{ type: "text", text: "The file has been updated successfully." }],
+			details: {
+				diff: "+1 new line", // pi 原生行号格式，不消费
+				patch: [
+					"--- src/a.ts",
+					"+++ src/a.ts",
+					"@@ -1,3 +1,3 @@",
+					" context",
+					"-old line",
+					"+new line",
+					" tail",
+				].join("\n"),
+				firstChangedLine: 2,
+			},
+		},
+		{ expanded: true },
+		theme,
+		{ args: { path: "src/a.ts", edits: [{ oldText: "old line", newText: "new line" }] } },
+	) as { render: (w: number) => string[] };
+
+	const text = stripAnsi(component.render(80).join("\n"));
+	assert.match(text, /Edit/);
+	assert.match(text, /src\/a\.ts/);
+	assert.match(text, /\+1 −1/, "unified patch 解析出的增删统计");
+	assert.match(text, /new line/);
+	assert.match(text, /old line/);
+	for (const width of [40, 60, 80, 120, 160]) {
+		assertNoOverflow(component.render(width), width);
+	}
+});
+
+test("edit result without any diff source still renders the header safely", () => {
+	const tool = makeTool("edit");
+	patchReadmapTool(tool);
+	const component = tool.renderResult?.(
+		{ content: [{ type: "text", text: "The file has been updated successfully." }] },
+		{ expanded: true },
+		theme,
+		{ args: { path: "src/a.ts", edits: [{ oldText: "a", newText: "b" }] } },
+	) as { render: (w: number) => string[] };
+
+	const text = stripAnsi(component.render(80).join("\n"));
+	assert.match(text, /Edit/);
+	assert.match(text, /src\/a\.ts/);
+	assert.ok(!text.includes("−"), "无 diff 来源时不显示增删统计");
+	assert.match(text, /updated successfully/, "展开态回退展示成功正文，不静默丢弃");
+});
+
+test("edit result falls back to header only when collapsed without a diff source", () => {
+	const tool = makeTool("edit");
+	patchReadmapTool(tool);
+	const component = tool.renderResult?.(
+		{ content: [{ type: "text", text: "The file has been updated successfully." }] },
+		{ expanded: false },
+		theme,
+		{ args: { path: "src/a.ts", edits: [{ oldText: "a", newText: "b" }] } },
+	) as { render: (w: number) => string[] };
+
+	const text = stripAnsi(component.render(80).join("\n"));
+	assert.match(text, /Edit/);
+	assert.ok(!text.includes("updated successfully"), "折叠态不展示正文");
+});
+
+test("read result consumes pi-native truncation metadata", () => {
+	const tool = makeTool("read");
+	patchReadmapTool(tool);
+	const component = tool.renderResult?.(
+		{
+			content: [{ type: "text", text: "line 1\nline 2\nline 3" }],
+			details: { truncation: { truncated: true, truncatedBy: "lines", outputLines: 3, totalLines: 120, maxLines: 100 } },
+		},
+		{ expanded: true },
+		theme,
+		{ args: { path: "src/big.ts", offset: 1, limit: 100 } },
+	) as { render: (w: number) => string[] };
+
+	const text = stripAnsi(component.render(80).join("\n"));
+	assert.match(text, /3\/120 lines/, "截断时显示可见/总行数");
+	assert.match(text, /truncated/);
+	for (const width of [40, 60, 80, 120]) {
+		assertNoOverflow(component.render(width), width);
+	}
+});
+
+test("read result without truncation metadata keeps the plain line count", () => {
+	const tool = makeTool("read");
+	patchReadmapTool(tool);
+	const component = tool.renderResult?.(
+		{ content: [{ type: "text", text: "only line" }] },
+		{ expanded: true },
+		theme,
+		{ args: { path: "src/small.ts" } },
+	) as { render: (w: number) => string[] };
+
+	const text = stripAnsi(component.render(80).join("\n"));
+	assert.match(text, /1 line\b/);
+	assert.ok(!text.includes("truncated"));
 });

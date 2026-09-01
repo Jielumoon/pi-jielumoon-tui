@@ -1,7 +1,7 @@
 /**
- * 工具 renderer 接管：readmap 工具走 hashline 事件 / globalThis / registerTool 三条路径，
- * pi 核心 grep/find 走 ToolExecutionComponent 桥接。
- * 只替换 renderCall/renderResult；execute 与参数 schema 保持原引用。
+ * 工具 renderer 接管：readmap 重定义工具走 hashline 事件 / globalThis / registerTool 三条路径，
+ * pi 原生与第三方注册的全部目标工具（含 read/edit/write/grep/find/apply_patch）走
+ * ToolExecutionComponent 组件桥接兜底。只替换 renderCall/renderResult；execute 与参数 schema 保持原引用。
  */
 
 import { ToolExecutionComponent, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
@@ -10,6 +10,7 @@ import { isObjectLike as isObject } from "../guards.ts";
 import { installPrototypePatch } from "../prototype-patch-registry.ts";
 import { asThemeLike } from "./presentation.ts";
 import {
+	renderApplyPatchResult,
 	renderBashResult,
 	renderEditResult,
 	renderFindResult,
@@ -31,13 +32,13 @@ import { stopAllStreamAnimations } from "./stream-animation.ts";
 export const READMAP_RENDERER_MARK = Symbol.for("pi-jielumoon.readmap-renderer");
 
 /**
- * 接管的工具集合：read/edit/write/bash/ls 来自 readmap（hashline/global/registerTool 路径），
- * grep/find 是 pi 核心工具（经 ToolExecutionComponent 的 getRenderShell 桥接就地 patch）。
+ * 接管的工具集合：read/edit/write/bash/ls（readmap 或 pi 原生）、grep/find（pi 核心）、
+ * apply_patch（第三方 @xl0/pi-lovely-codex）。readmap 注册路径只覆盖扩展重定义的工具，
+ * pi 原生与第三方注册的工具靠组件桥接兜底，全部名字共用这一个集合。
  */
-export const TARGET_TOOL_NAMES = new Set(["read", "edit", "write", "bash", "ls", "grep", "find"]);
-
-/** grep/find 不经 readmap 三条注册路径，由核心工具桥接覆盖。 */
-const CORE_BRIDGED_TOOL_NAMES = new Set(["grep", "find"]);
+export const TARGET_TOOL_NAMES = new Set([
+	"read", "edit", "write", "bash", "ls", "grep", "find", "apply_patch",
+]);
 
 const readmapRendererSettings = new WeakMap<object, ReadmapRendererSettings>();
 
@@ -144,13 +145,14 @@ export function patchReadmapTool(
 					return renderWriteResult(result, options, t, context);
 				case "bash":
 					return renderBashResult(result, options, t, context);
-
 				case "ls":
 					return renderLsResult(result, options, t, context);
 				case "grep":
 					return renderGrepResult(result, options, t, context);
 				case "find":
 					return renderFindResult(result, options, t, context);
+				case "apply_patch":
+					return renderApplyPatchResult(result, options, t, context);
 			}
 		} catch {
 			return (
@@ -206,17 +208,20 @@ type ToolComponentLike = {
 	builtInToolDefinition?: unknown;
 };
 
-let coreToolBridgeInstalled = false;
+let componentBridgeInstalled = false;
 
 /**
- * pi 核心工具（grep/find）不经 hashline/global/registerTool 三条路径，扩展也拿不到
- * session 的私有工具注册表。桥接点选在 ToolExecutionComponent.getRenderShell：它在
- * 构造器里先于首次 updateDisplay 被调用，此刻就地 patch 该组件引用的工具定义对象，
+ * 组件桥接是所有目标工具的兜底网：readmap 注册路径（hashline/global/registerTool）
+ * 只能看到扩展重定义的工具；pi 原生的 read/edit/write/grep/find 与第三方注册的
+ * apply_patch 都不经这些路径。桥接点选在 ToolExecutionComponent.getRenderShell：
+ * 它在构造器里先于首次 updateDisplay 被调用，此刻就地 patch 该组件引用的工具定义对象
+ * （优先 toolDefinition——session 注册表的共享对象，跨组件持久；builtIn 副本仅作兜底），
  * 同一渲染周期内 renderShell/renderCall/renderResult 即全部生效。
- * 与 registerTool 拦截器同为幂等安装、扩展生命周期内保持；/reload 时注册表会换上新行为。
+ * 与 registerTool 拦截器同为幂等安装（READMAP_RENDERER_MARK 防重复 patch）；
+ * /reload 时注册表重建新对象，桥接重新生效。
  */
-function installCoreToolRendererBridge(settings: ReadmapRendererSettings): void {
-	if (coreToolBridgeInstalled) return;
+function installComponentRendererBridge(settings: ReadmapRendererSettings): void {
+	if (componentBridgeInstalled) return;
 	installPrototypePatch(
 		ToolExecutionComponent.prototype,
 		"getRenderShell",
@@ -224,7 +229,7 @@ function installCoreToolRendererBridge(settings: ReadmapRendererSettings): void 
 		({ predecessor, receiver, args }) => {
 			const component = receiver as ToolComponentLike;
 			const name = typeof component.toolName === "string" ? component.toolName : undefined;
-			if (name !== undefined && CORE_BRIDGED_TOOL_NAMES.has(name)) {
+			if (name !== undefined && TARGET_TOOL_NAMES.has(name)) {
 				try {
 					patchReadmapTool(component.toolDefinition ?? component.builtInToolDefinition, settings);
 				} catch {
@@ -234,7 +239,7 @@ function installCoreToolRendererBridge(settings: ReadmapRendererSettings): void 
 			return Reflect.apply(predecessor, receiver, args);
 		},
 	);
-	coreToolBridgeInstalled = true;
+	componentBridgeInstalled = true;
 }
 
 /** 观察后续 registerTool（含 bash）；幂等，扩展生命周期内保持。 */
@@ -263,9 +268,8 @@ function installRegisterToolObserver(pi: ExtensionAPI, settings: ReadmapRenderer
 }
 
 /**
- * 安装 readmap 工具可视化接管。
- * event/global 路径可靠覆盖 read/edit/write；bash 仅在本扩展先于它注册时可接管；
- * grep/find（pi 核心工具）经组件桥接覆盖。
+ * 安装 readmap 工具可视化接管：readmap 注册路径覆盖扩展重定义的工具，
+ * 组件桥接兜底 pi 原生与第三方注册的工具（read/edit/write/grep/find/apply_patch…）。
  * 只替换 renderCall/renderResult；execute 与参数 schema 保持原引用。
  */
 export default function installReadmapRenderers(
@@ -299,9 +303,9 @@ export default function installReadmapRenderers(
 	}
 
 	try {
-		installCoreToolRendererBridge(settings);
+		installComponentRendererBridge(settings);
 	} catch {
-		// 组件原型不可写时静默降级：grep/find 保持宿主原生渲染
+		// 组件原型不可写时静默降级：grep/find/apply_patch 保持宿主原生渲染
 	}
 
 	boot();

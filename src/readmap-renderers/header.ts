@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { getCapabilities, hyperlink, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { asRecord } from "../guards.ts";
+import { parsePatchEnvelopePaths } from "./apply-patch.ts";
 import {
 	displayText,
 	EXPAND_KEY,
@@ -118,6 +119,17 @@ function toolSubject(
 	}
 	if (name === "edit" || name === "write" || name === "create" || name === "overwrite") {
 		return { target: linkedPath(), meta: [] };
+	}
+	if (name === "apply_patch") {
+		const input = typeof record.input === "string" ? record.input : "";
+		const paths = parsePatchEnvelopePaths(input);
+		if (paths.length === 0) return { target: styleText(presentation, "toolOutput", "…"), meta: [] };
+		const primary = displayText(paths[0]!, presentation);
+		const styled = styleText(presentation, "syntaxType", shortenPath(primary));
+		return {
+			target: presentation.mode === "color" ? linkPath(styled, primary, context.cwd) : styled,
+			meta: paths.length > 1 ? [`${paths.length} files`] : [],
+		};
 	}
 	if (name === "bash") {
 		const raw = typeof record.command === "string" ? displayText(record.command, presentation) : "";
