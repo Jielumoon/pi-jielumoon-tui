@@ -37,10 +37,10 @@ import {
 
 const HASHLINE_RE = /^(\d+):([0-9a-fA-F]+)\|(.*)$/;
 /** 短 bash：不超过此行数时折叠态也整段展示。 */
-const BASH_SHORT_MAX_LINES = 4;
+const BASH_SHORT_MAX_LINES = 8;
 const BASH_SHORT_MAX_CHARS = 2_000;
-/** 长 bash 折叠态预览行数。 */
-const BASH_COLLAPSED_PREVIEW_LINES = 4;
+/** 长 bash 折叠态预览行数，与 write/edit/apply_patch 预览行数对齐。 */
+const BASH_COLLAPSED_PREVIEW_LINES = 8;
 /** ls 折叠态最多展示的目录条目。 */
 const LS_COLLAPSED_PREVIEW_ENTRIES = 8;
 /** apply_patch 信封流式预览的尾部行数，与 write 预览行数对齐。 */

@@ -1543,8 +1543,8 @@ test("bash short output shows body when collapsed; long output previews", () => 
 	) as { render: (w: number) => string[] };
 	const longText = stripAnsi(long.render(80).join("\n"));
 	assert.match(longText, /Bash.*40 lines/);
-	assert.match(longText, /line-36/); // 成功命令优先显示末尾摘要
-	assert.match(longText, /36 more lines · Ctrl\+O/);
+	assert.match(longText, /line-32/, "成功命令优先显示末尾摘要"); // 尾部 8 行从 line-32 开始
+	assert.match(longText, /32 more lines · Ctrl\+O/);
 	assert.match(longText, /line-39/);
 	assert.doesNotMatch(longText, /line-0(?:\n|$)/);
 
