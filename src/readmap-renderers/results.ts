@@ -6,7 +6,7 @@ import { parseUnifiedPatch } from "./apply-patch.ts";
 import { reuseOrCreateText, reuseOrCreateWidthAware } from "./components.ts";
 import { isDiffData, renderDiffLines, reuseOrCreateDiff } from "./diff.ts";
 import { EditCallComponent, reuseOrCreateEditCall } from "./edit-stream.ts";
-import { formatLineRange, renderToolHeader } from "./header.ts";
+import { formatLineRange, normalizeLineNumber, renderToolHeader } from "./header.ts";
 import {
 	asThemeLike,
 	clampLine,
@@ -41,6 +41,8 @@ const BASH_SHORT_MAX_LINES = 8;
 const BASH_SHORT_MAX_CHARS = 2_000;
 /** 长 bash 折叠态预览行数，与 write/edit/apply_patch 预览行数对齐。 */
 const BASH_COLLAPSED_PREVIEW_LINES = 8;
+/** pi 原生 read 尾部续读通知：`[Showing lines A-B of N …]` 或 `[N more lines in file …]`。 */
+const NATIVE_READ_NOTICE = /\n\n\[(?:Showing lines \d+-\d+ of (\d+)|(\d+) more lines in file)[^\]]*\]$/;
 /** ls 折叠态最多展示的目录条目。 */
 const LS_COLLAPSED_PREVIEW_ENTRIES = 8;
 /** apply_patch 信封流式预览的尾部行数，与 write 预览行数对齐。 */
@@ -284,6 +286,11 @@ export function renderReadResult(
 	const ptc = asRecord(details?.ptcValue);
 	const expanded = isExpanded(options, context);
 	const meta: string[] = [];
+	const pushCount = (shown: number, total: number, truncated: boolean): void => {
+		const word = shown === 1 ? "line" : "lines";
+		meta.push(total > shown ? `${shown}/${total} ${word}` : `${shown} ${word}`);
+		if (truncated) meta.push("truncated");
+	};
 	if (ptc) {
 		const range = asRecord(ptc.range);
 		const truncation = asRecord(ptc.truncation);
@@ -295,28 +302,32 @@ export function renderReadResult(
 		const visible = truncation && typeof truncation.outputLines === "number"
 			? truncation.outputLines
 			: Math.max(0, end - start + 1);
-		const word = visible === 1 ? "line" : "lines";
 		if (startLine !== undefined && endLine !== undefined) {
 			meta.push(formatLineRange({ start: startLine, end: endLine }));
 		}
-		meta.push(truncation ? `${visible}/${typeof truncation.totalLines === "number" ? truncation.totalLines : total} ${word}` : `${visible} ${word}`);
-		if (truncation) meta.push("truncated");
+		pushCount(visible, truncation ? (typeof truncation.totalLines === "number" ? truncation.totalLines : total) : visible, Boolean(truncation));
 		const symbol = asRecord(ptc.symbol);
 		if (symbol && typeof symbol.name === "string") meta.push(`symbol: ${displayText(symbol.name, p)}`);
 		else if (typeof ptc.symbol === "string") meta.push(`symbol: ${displayText(ptc.symbol, p)}`);
 		if (ptc.map) meta.push("map");
 		meta.push(...warningBadges(ptc.warnings));
 	} else {
-		const count = body.length === 0 ? 0 : body.split("\n").length;
+		// pi 原生 read 没有 range 元数据：起点取 offset，行数和文件总行数从正文尾部的续读通知反推。
+		const notice = NATIVE_READ_NOTICE.exec(body);
+		const content = notice ? body.slice(0, notice.index) : body;
+		const shown = content.length === 0 ? 0 : content.split("\n").length;
+		const start = normalizeLineNumber(asRecord(context.args)?.offset) ?? 1;
+		const end = start + shown - 1;
 		const native = asRecord(details?.truncation);
-		if (native?.truncated === true) {
-			// pi 原生 read 截断：优先用截断元数据，取不到再退回正文行数。
-			const shown = typeof native.outputLines === "number" ? native.outputLines : count;
-			const total = typeof native.totalLines === "number" ? native.totalLines : shown;
-			meta.push(`${shown}/${total} lines`, "truncated");
-		} else {
-			meta.push(`${count} ${count === 1 ? "line" : "lines"}`);
-		}
+		const total = notice?.[1] !== undefined
+			? Number(notice[1])
+			: notice?.[2] !== undefined
+				? end + Number(notice[2])
+				: typeof native?.totalLines === "number"
+					? native.totalLines
+					: end;
+		if (shown > 0) meta.push(formatLineRange({ start, end }));
+		pushCount(shown, total, native?.truncated === true);
 	}
 
 	const header = renderToolHeader("read", context.args, p, context, {

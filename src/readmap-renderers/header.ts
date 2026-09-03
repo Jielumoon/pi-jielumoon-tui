@@ -60,7 +60,7 @@ export function phaseMarker(presentation: RenderPresentation, phase: ToolPhase):
 }
 
 /** Provider 网关可能把 offset/limit 序列化为数字字符串。 */
-function normalizeLineNumber(value: unknown): number | undefined {
+export function normalizeLineNumber(value: unknown): number | undefined {
 	const parsed = typeof value === "number"
 		? value
 		: typeof value === "string" && /^\d+$/.test(value.trim())

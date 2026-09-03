@@ -2095,3 +2095,31 @@ test("read result without truncation metadata keeps the plain line count", () =>
 	assert.match(text, /1 line\b/);
 	assert.ok(!text.includes("truncated"));
 });
+
+test("pi-native read derives line range and file total from the continuation notice", () => {
+	const tool = makeTool("read");
+	patchReadmapTool(tool);
+	const render = (text: string, args: Record<string, unknown>): string => {
+		const component = tool.renderResult?.(
+			{ content: [{ type: "text", text }] },
+			{ expanded: false },
+			theme,
+			{ args },
+		) as { render: (w: number) => string[] };
+		return stripAnsi(component.render(100).join("\n"));
+	};
+
+	const limited = render("a\nb\nc\n\n[7 more lines in file. Use offset=13 to continue.]", { path: "src/x.ts", offset: 10, limit: 3 });
+	assert.match(limited, /10 ~ 12/, "offset 起点 + 正文行数得到实际范围");
+	assert.match(limited, /3\/19 lines/, "通知里的剩余行数补出文件总行数");
+	assert.ok(!limited.includes("more lines"), "续读通知不计入行数");
+
+	const showing = render("a\nb\n\n[Showing lines 5-6 of 40. Use offset=7 to continue.]", { path: "src/x.ts", offset: "5" });
+	assert.match(showing, /5 ~ 6/);
+	assert.match(showing, /2\/40 lines/);
+
+	const whole = render("a\nb", { path: "src/x.ts" });
+	assert.match(whole, /1 ~ 2/);
+	assert.match(whole, /2 lines/);
+	assert.ok(!/\d+\/\d+ lines/.test(whole), "读完整文件不显示分母");
+});
