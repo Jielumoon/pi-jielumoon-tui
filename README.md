@@ -76,23 +76,6 @@ pi -e /home/jielumoon/opt/projects/pi-tui/pi-jielumoon
 /reload
 ```
 
-### Pi regular 模式闪屏补丁
-
-Pi `regular` 渲染器会把首个变化行到最后变化行之间的稳定行也执行清行重写；当上方工具 spinner 与下方 Working 行同时变化时，这段无效重绘会放大成闪屏。本仓库提供一个独立补丁脚本，让区间内稳定的非图片行只移动光标、不再清空重写。
-
-每次全局更新 Pi 后，在本仓库运行一次：
-
-```bash
-npm run patch:pi-tui-flicker:check
-npm run patch:pi-tui-flicker
-```
-
-- `--check` 只检查，不写文件；正式命令可重复运行，已打补丁时会直接退出。替换阶段会再次核对目标，并在并发出现新目标时拒绝覆盖；请等全局 Pi 更新命令完全结束后再运行，不要和 `npm install -g` 并发执行。
-- 脚本自动寻找全局 `@earendil-works/pi-tui`，也可用 `node scripts/patch-pi-tui-flicker.mjs --target <pi-tui目录或tui-main-screen.js>` 指定非标准安装。
-- 写入前会校验精确源码锚点和补丁后 JavaScript 语法；Pi 上游结构变化时拒绝修改，不做模糊替换。
-- 原文件按版本和 SHA-256 保存在 `~/.pi/agent/patch-backups/pi-tui/`，命令会同时输出目标与备份路径；需要恢复时把该备份复制回目标即可。
-- 补丁只处理 `regular` 模式；`fullscreen` 已有逐行跳过逻辑。当前已运行的 Pi 不会热加载核心模块，应用后需新开 Pi 进程。
-
 ## 命令
 
 加载扩展后，使用 `/jielumoon-tui` 管理 Footer：
