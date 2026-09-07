@@ -259,6 +259,30 @@ test("edit call keeps an eight-row tail collapsed and expands fully", () => {
 	}
 });
 
+test("Edit 后到的旧文本不倒带重播已经显示的新文本", (t) => {
+	const component = new EditCallComponent();
+	t.after(() => component.stop());
+	const newText = Array.from({ length: 10 }, (_, index) => `new-${index}`).join("\n");
+	const update = (oldText?: string) => component.update(
+		{ path: "a.ts", edits: [{ newText, ...(oldText === undefined ? {} : { oldText }) }] },
+		colorPresentation,
+		{ argsComplete: false, isPartial: true },
+		{ editAnimation: true },
+	);
+	update();
+	while (component.advanceAnimation()) {
+		// newText 先到达并显示完，oldText 随后逐块到达。
+	}
+	const tail = component.render(80).slice(1);
+	assert.equal(tail.length, 8, "基线为 8 行绿色尾部预览");
+	assert.match(tail.join("\n"), /▌\+ new-9/);
+	for (const oldText of ["o", "old-0\no", "old-0\nold-1\no"]) {
+		update(oldText);
+		assert.deepEqual(component.render(80).slice(1), tail, "前插红行不得清空或重播已有绿行");
+		assert.equal(component.advanceAnimation(), false, "非尾部追加更新直接呈现快照，不制造动画积压");
+	}
+});
+
 test("edit reveal clamps when streaming args backtrack", () => {
 	const component = new EditCallComponent();
 	const presentation = colorPresentation;

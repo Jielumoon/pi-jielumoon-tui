@@ -16,7 +16,6 @@ import {
 } from "./presentation.ts";
 import {
 	advanceStreamReveal,
-	commonPrefixBoundary,
 	scheduleStreamAnimation,
 	trailingTextByWidth,
 	unscheduleStreamAnimation,
@@ -268,7 +267,8 @@ export class EditCallComponent implements Component {
 		const input = editStreamInput(args, presentation);
 		const nextTarget = input.lines.map((line) => line.text).join("\n");
 		if (!nextTarget.startsWith(this.revealed)) {
-			this.revealed = nextTarget.slice(0, commonPrefixBoundary(this.revealed, nextTarget));
+			// 后到的 oldText 会前插红行；直接呈现新快照，避免已有绿行反复倒带重播。
+			this.revealed = nextTarget;
 		}
 		this.targetText = nextTarget;
 		this.targetLines = input.lines;
