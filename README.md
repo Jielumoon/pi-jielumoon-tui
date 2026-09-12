@@ -150,6 +150,8 @@ npm audit --omit=dev
 - `@earendil-works/pi-tui >=0.83.0`
 - `@earendil-works/pi-ai >=0.83.0`
 
+Footer 默认使用宽度稳定的 Unicode 图标。部分 `xterm-256color`、tmux 或 WSL 字体会把 Nerd Font 私有区图标绘制为 2 列，而 pi-tui 按 1 列计算，可能造成 Footer 换行和旧行残留。确认终端字体与列宽一致后，可用 `POWERLINE_NERD_FONTS=1` 显式启用 Nerd Font；设置为 `0` 可强制使用 Unicode 图标。
+
 ### 自研订阅用量
 
 Footer 会按当前模型在左侧会话统计中显示 Codex、Claude、OpenRouter 或 Grok 的额度：它紧跟费用 / `sub`，位于会话时长前，例如 `… · 13.162 sub · 7d 37% ↻ 1d · 1m25s`。`/usage` 可强制刷新当前账户的简要详情。成功结果缓存 60 秒，失败遵守 Retry-After 和退避时间；自定义代理模型不会把凭证发送到官方额度接口。

@@ -62,21 +62,26 @@ const UNICODE_ICONS: IconSet = {
 	blackhole: "◉",
 };
 
-function hasNerdFonts(): boolean {
+export function hasNerdFonts(): boolean {
 	if (process.env.POWERLINE_NERD_FONTS === "0") return false;
 	if (process.env.POWERLINE_NERD_FONTS === "1") return true;
 	if (process.env.GHOSTTY_RESOURCES_DIR) return true;
-	const term = (process.env.TERM_PROGRAM || process.env.TERM || "").toLowerCase();
-	const knownBad = ["linux", "dumb"];
-	if (knownBad.some((name) => term === name)) return false;
-	return true;
+	// 终端无法通过环境变量可靠声明私有区 glyph 的实际列宽。
+	// 默认使用 Unicode fallback，避免 Nerd Font 在 xterm/tmux/WSL 中被绘制为双宽，
+	// 导致 pi-tui 的 visibleWidth 账本与硬件光标位置漂移。支持 Nerd Font 的环境
+	// 可显式设置 POWERLINE_NERD_FONTS=1。
+	return false;
 }
 
 let cachedIcons: IconSet | undefined;
 
+export function resolveIcons(useNerdFonts: boolean): IconSet {
+	return useNerdFonts ? NERD_ICONS : UNICODE_ICONS;
+}
+
 export function getIcons(): IconSet {
 	// 环境变量在进程内不会变化；Footer 每帧调用，缓存判定结果。
-	cachedIcons ??= hasNerdFonts() ? NERD_ICONS : UNICODE_ICONS;
+	cachedIcons ??= resolveIcons(hasNerdFonts());
 	return cachedIcons;
 }
 
