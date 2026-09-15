@@ -153,6 +153,17 @@ function headerValue(headers: Record<string, string> | undefined, name: string):
 	return entry?.[1];
 }
 
+/** HTTP 字段名不区分大小写，后面的来源覆盖前面的值。 */
+function mergeHeaders(...sources: Array<Record<string, unknown> | undefined>): Record<string, string> {
+	const headers: Record<string, string> = {};
+	for (const source of sources) {
+		for (const [key, value] of Object.entries(source ?? {})) {
+			if (typeof value === "string") headers[key.toLowerCase()] = value;
+		}
+	}
+	return headers;
+}
+
 function authorizationFrom(auth: { apiKey?: string; headers?: Record<string, string> }): string | undefined {
 	return headerValue(auth.headers, "Authorization") ?? (auth.apiKey ? `Bearer ${auth.apiKey}` : undefined);
 }
@@ -464,7 +475,7 @@ function readGrokCliToken(): string | undefined {
 }
 
 function authFingerprint(providerId: UsageProviderId, auth: UsageAuth): string {
-	const secret = authorizationFrom(auth) ?? auth.apiKey ?? auth.accountId ?? "";
+	const secret = JSON.stringify([auth.apiKey, auth.accountId, Object.entries(mergeHeaders(auth.headers)).sort(([a], [b]) => a.localeCompare(b))]);
 	return `${providerId}:${createHash("sha256").update(secret).digest("hex")}`;
 }
 
@@ -488,11 +499,7 @@ async function resolveUsageAuth(ctx: ExtensionContext, providerId: UsageProvider
 
 	const modelResult = await registry.getApiKeyAndHeaders(model);
 	if (!modelResult.ok) throw new UsageQueryError("auth");
-	const headers: Record<string, string> = Object.fromEntries(
-		Object.entries({ ...(providerAuth?.headers ?? {}), ...(modelResult.headers ?? {}) }).filter(
-			(entry): entry is [string, string] => typeof entry[1] === "string",
-		),
-	);
+	const headers = mergeHeaders(providerAuth?.headers, modelResult.headers);
 	const apiKey = modelResult.apiKey ?? providerAuth?.apiKey;
 	const credential = credentialRecord(providerId);
 	const oauth = hasOAuthCredential(credential);
@@ -508,16 +515,16 @@ async function resolveUsageAuth(ctx: ExtensionContext, providerId: UsageProvider
 		overrideAuthorization = true;
 	}
 
-	if (overrideAuthorization && resolvedApiKey) headers.Authorization = `Bearer ${resolvedApiKey}`;
+	if (overrideAuthorization && resolvedApiKey) headers.authorization = `Bearer ${resolvedApiKey}`;
 
 	if (!resolvedApiKey && !authorizationFrom({ headers })) return undefined;
 	return { apiKey: resolvedApiKey, headers, accountId };
 }
 
 function requestHeaders(auth: UsageAuth, extra: Record<string, string> = {}): Record<string, string> {
-	const headers: Record<string, string> = { Accept: "application/json", ...auth.headers, ...extra };
-	const authorization = authorizationFrom(auth);
-	if (authorization) headers.Authorization = authorization;
+	const headers = mergeHeaders({ Accept: "application/json" }, auth.headers, extra);
+	const authorization = authorizationFrom({ ...auth, headers });
+	if (authorization) headers.authorization = authorization;
 	return headers;
 }
 
@@ -644,6 +651,11 @@ export class SubscriptionUsageController implements SubscriptionUsageSource {
 	private activeController: AbortController | undefined;
 	private inflight: { cacheKey: string; promise: Promise<UsageSnapshot | undefined> } | undefined;
 	private generation = 0;
+	private selectionGeneration = 0;
+	private selectedIdentity: string | undefined;
+	private selectedCacheKey: string | undefined;
+	private authSequence = 0;
+	private appliedAuthSequence = 0;
 	private active = false;
 	private timer: ReturnType<typeof setTimeout> | undefined;
 	private state: SubscriptionUsageState | undefined;
@@ -680,6 +692,7 @@ export class SubscriptionUsageController implements SubscriptionUsageSource {
 		});
 
 		pi.on("session_start", (_event, ctx) => {
+			this.resetSelection();
 			this.active = true;
 			this.clearLegacyStatus(ctx);
 			this.setState(undefined);
@@ -699,11 +712,7 @@ export class SubscriptionUsageController implements SubscriptionUsageSource {
 		});
 		pi.on("session_shutdown", (_event, ctx) => {
 			this.active = false;
-			this.generation += 1;
-			this.activeController?.abort();
-			this.activeController = undefined;
-			this.inflight = undefined;
-			this.clearTimer();
+			this.resetSelection();
 			this.cache.clear();
 			this.failureUntil.clear();
 			this.setState(undefined);
@@ -712,22 +721,39 @@ export class SubscriptionUsageController implements SubscriptionUsageSource {
 	}
 
 	async refresh(ctx: ExtensionContext | ExtensionCommandContext, force: boolean): Promise<UsageSnapshot | undefined> {
-		const providerId = providerIdFor(ctx.model?.provider);
-		const identity = modelIdentity(ctx);
-		if (!providerId || !identity) {
-			this.clearTimer();
-			this.setState(undefined);
-			return undefined;
-		}
-		if (this.state?.modelIdentity !== identity) this.setState(undefined);
-
+		let providerId: UsageProviderId | undefined;
+		let identity: string | undefined;
+		let selectionGeneration = this.selectionGeneration;
+		const authSequence = ++this.authSequence;
 		try {
+			providerId = providerIdFor(ctx.model?.provider);
+			identity = modelIdentity(ctx);
+			if (this.selectedIdentity !== identity) {
+				this.resetSelection();
+				this.selectedIdentity = identity;
+				this.setState(undefined);
+			}
+			selectionGeneration = this.selectionGeneration;
+			if (!providerId || !identity) return undefined;
 			const auth = await resolveUsageAuth(ctx, providerId);
+			if (!this.isCurrentSelection(ctx, identity, selectionGeneration)) return undefined;
 			if (!auth) {
+				if (authSequence < this.appliedAuthSequence) return undefined;
+				this.appliedAuthSequence = authSequence;
+				this.cancelRequest();
+				this.selectedCacheKey = undefined;
 				this.setNotice(identity, providerId, "unavailable");
 				return undefined;
 			}
 			const cacheKey = `${identity}:${authFingerprint(providerId, auth)}`;
+			// 同账号的并发认证仍可共享请求；旧账号的迟到认证不能夺走新选择。
+			if (authSequence < this.appliedAuthSequence && cacheKey !== this.selectedCacheKey) return undefined;
+			this.appliedAuthSequence = Math.max(this.appliedAuthSequence, authSequence);
+			if (this.selectedCacheKey !== cacheKey) {
+				this.cancelRequest();
+				this.selectedCacheKey = cacheKey;
+				this.setState(undefined);
+			}
 			const cached = this.cache.get(cacheKey);
 			if (!force && cached && this.now() - cached.fetchedAt < USAGE_CACHE_TTL_MS) {
 				this.setReady(identity, cached.usage);
@@ -754,11 +780,42 @@ export class SubscriptionUsageController implements SubscriptionUsageSource {
 			}
 		} catch (error) {
 			// 认证解析阶段的失败：无 cacheKey 可退避，只提示并稍后重试。
-			if (isStaleContextError(error)) return undefined;
+			if (isStaleContextError(error) || !providerId || !identity
+				|| authSequence < this.appliedAuthSequence
+				|| !this.isCurrentSelection(ctx, identity, selectionGeneration)) return undefined;
+			this.appliedAuthSequence = authSequence;
+			this.cancelRequest();
+			this.selectedCacheKey = undefined;
 			this.setNotice(identity, providerId, noticeFor(error));
 			this.schedule(ctx, FAILURE_BACKOFF_MS);
 			return undefined;
 		}
+	}
+
+	private isCurrentSelection(ctx: ExtensionContext, identity: string, generation: number): boolean {
+		if (generation !== this.selectionGeneration || identity !== this.selectedIdentity) return false;
+		try {
+			return modelIdentity(ctx) === identity;
+		} catch (error) {
+			if (isStaleContextError(error)) return false;
+			throw error;
+		}
+	}
+
+	private cancelRequest(): void {
+		this.generation++;
+		this.activeController?.abort();
+		this.activeController = undefined;
+		this.inflight = undefined;
+		this.clearTimer();
+	}
+
+	private resetSelection(): void {
+		this.selectionGeneration++;
+		this.selectedIdentity = undefined;
+		this.selectedCacheKey = undefined;
+		this.appliedAuthSequence = 0;
+		this.cancelRequest();
 	}
 
 	private async fetchAndStore(
@@ -769,21 +826,24 @@ export class SubscriptionUsageController implements SubscriptionUsageSource {
 		cached: CacheEntry | undefined,
 		auth: UsageAuth,
 	): Promise<UsageSnapshot | undefined> {
-		// 只有真正发起网络请求时才作废旧请求；缓存命中不再打断在飞请求。
+		// 同一选择下发起新请求时更新网络代次；模型/账号切换另外作废旧请求。
 		const requestGeneration = ++this.generation;
+		const selectionGeneration = this.selectionGeneration;
 		this.activeController?.abort();
 		const controller = new AbortController();
 		this.activeController = controller;
 		try {
 			const usage = await fetchProviderUsage(providerId, auth, controller.signal, this.fetchImpl);
-			if (controller.signal.aborted || requestGeneration !== this.generation) return undefined;
+			if (controller.signal.aborted || requestGeneration !== this.generation
+				|| !this.isCurrentSelection(ctx, identity, selectionGeneration)) return undefined;
 			this.cache.set(cacheKey, { usage, fetchedAt: this.now() });
 			this.failureUntil.delete(cacheKey);
 			this.setReady(identity, usage);
 			this.schedule(ctx, USAGE_CACHE_TTL_MS);
 			return usage;
 		} catch (error) {
-			if (controller.signal.aborted || requestGeneration !== this.generation || isStaleContextError(error)) return undefined;
+			if (controller.signal.aborted || requestGeneration !== this.generation || isStaleContextError(error)
+				|| !this.isCurrentSelection(ctx, identity, selectionGeneration)) return undefined;
 			const retryAfterMs = error instanceof UsageQueryError ? error.retryAfterMs : undefined;
 			const backoff = Math.max(FAILURE_BACKOFF_MS, retryAfterMs ?? 0);
 			this.failureUntil.set(cacheKey, this.now() + backoff);

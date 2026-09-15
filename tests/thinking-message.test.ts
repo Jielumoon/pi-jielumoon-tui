@@ -38,3 +38,45 @@ test("Thought trail keeps the latest lines visible and ends at the newest line",
 		cleanup();
 	}
 });
+
+test("思考标签只替换思考组件，保留同名正文和代码行", () => {
+	initTheme("dark");
+	const cleanup = installThinkingMessageStyle(() => ({ italic: (text: string) => text }) as Theme);
+	try {
+		for (const hideThinking of [false, true]) {
+			const message = {
+				role: "assistant", stopReason: "stop", timestamp: 0,
+				content: [
+					{ type: "text", text: "Thinking..." },
+					{ type: "thinking", thinking: "private reasoning" },
+					{ type: "text", text: "Thought\n\n```text\nThinking...\n```" },
+				],
+			} as never;
+			const component = new AssistantMessageComponent(message, hideThinking);
+			const lines = component.render(80).map(stripAnsi);
+			assert.ok(lines.some((line) => line.trim() === "Thinking..."));
+			assert.ok(lines.some((line) => line.trim() === "Thought"));
+			assert.equal(lines.filter((line) => line.includes("Thinking...")).length, 2);
+			assert.equal(lines.some((line) => line.trim() === "✦ Thought"), hideThinking);
+		}
+	} finally {
+		cleanup();
+	}
+});
+
+test("Thought trail 在零 padding 和默认 padding 下保留满行文本", () => {
+	initTheme("dark");
+	const cleanup = installThinkingMessageStyle(() => ({ italic: (text: string) => text }) as Theme);
+	try {
+		const thinking = "abcdefghijklmnopqrstuvwxyzABCDEFGH";
+		for (const padding of [0, 1]) {
+			const component = new AssistantMessageComponent({
+				role: "assistant", content: [{ type: "thinking", thinking }], stopReason: "stop", timestamp: 0,
+			} as never, false, undefined, undefined, padding);
+			const body = component.render(40).map(stripAnsi).filter((line) => line.trim() && !line.includes("Thought trail"));
+			assert.equal(body.map((line) => line.slice(7).trimEnd()).join(""), thinking);
+		}
+	} finally {
+		cleanup();
+	}
+});

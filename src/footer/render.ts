@@ -264,9 +264,11 @@ function renderStatsLines(
 	}
 
 	const elapsed = settings.elapsed ? snapshot.nowMs - snapshot.sessionStartMs : 0;
-	const right = elapsed >= 5000 ? segment(theme, icons.time, "dim", formatDuration(elapsed), "dim") : "";
+	const right = elapsed >= 5000
+		? truncateToWidth(segment(theme, icons.time, "dim", formatDuration(elapsed), "dim"), width, "…")
+		: "";
 	const rightWidth = visibleWidth(right);
-	const leftBudget = rightWidth > 0 ? Math.max(16, width - rightWidth - 2) : width;
+	const leftBudget = rightWidth > 0 ? Math.min(width, Math.max(16, width - rightWidth - 2)) : width;
 	const quota = settings.extensions
 		? renderSubscriptionUsage(theme, snapshot, renderData.subscriptionUsage, !settings.provider, leftBudget)
 		: null;
@@ -368,5 +370,5 @@ export function renderFooter(
 		if (statusLine) lines.push(statusLine);
 	}
 
-	return lines;
+	return lines.map((line) => truncateToWidth(line, width, theme.fg("dim", "…")));
 }

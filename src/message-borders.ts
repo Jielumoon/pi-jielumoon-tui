@@ -247,6 +247,7 @@ function renderSakuraUserMessage(
 		0,
 		makeUserMarkdownTheme(theme),
 		{ color: (content) => themeFg(theme, "userMessageText", content) },
+		{ preserveOrderedListMarkers: true, preserveBackslashEscapes: true },
 	);
 	const rendered = renderer.render(contentWidth);
 	const contentLines = rendered.length > 0 ? rendered : [""];

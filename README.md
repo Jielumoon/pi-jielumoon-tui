@@ -9,7 +9,7 @@
 ### Footer 与上下文
 
 - 第一行以稳定左右锚点展示路径、分支、会话与 Provider、Model、Thinking level
-- 第二行展示输入/输出 token、缓存、费用、订阅额度与会话耗时
+- 第二行展示输入/输出 token、缓存、费用、订阅额度与会话耗时；累计包含宿主记录的压缩、分支总结和工具调用用量
 - 上下文使用 8–20 列前景色 compact gauge，不再绘制全宽背景色块或在 Footer 重复百分比
 - Blackhole 与 Magic Context 二选一占用同一状态行：默认显示 `✦ MC 140K · 36% · idle`；`historian`、`recomp` 和 `⚠ historian failed` 会追加当前 `provider/model`，Blackhole 有快照时可切回 `BH O/R/P/C`；普通扩展状态与 MC 不重复显示
 - 保留原版 Footer 的显示设置和持久化配置
@@ -27,9 +27,9 @@
 - 用户消息使用无标题 Sakura 完整圆框，粉色粗 `▌` rail 位于框内，和工具状态卡保持明确区别
 - read 保持无框并左缩进 2 格；其它工具把唯一 canonical header 嵌入 Sakura 上边框，溢出时以 `…` 收束并始终保留右侧封口横线
 - 工具框默认剥离 Pi 默认背景色；可通过“工具状态底色”开关恢复按运行状态变化的主题底色，Read 和图片旁路保持无底色
-- Read 默认单行；Edit 流式期间逐字展示伪 diff（操作标签 + 红减绿加），完成后换真实 diff；Write 真实跟随参数流自适应逐字显示，默认保留末尾 8 个终端行，常规内容自动语法高亮、超大内容安全回退纯文本；Bash 成功显示尾部摘要、失败保留错误 rail；Ctrl+O 展开完整内容
-- Grep / Find（pi 核心工具）同样进 Sakura 卡片：grep 按文件分组、行号右对齐、匹配词高亮、折叠保留 6 个匹配；find 复用 ls 双列条目排版、目录带 `▸`、折叠 8 条；header 展示 `/pattern/ in path` 与 glob/-i/limit 等 meta
-- Apply_patch（@xl0/pi-lovely-codex，GPT/Codex 模型）同样进 Sakura 卡片：流式期间着色预览信封尾部 8 行，完成后按 `details.patch` 渲染逐文件 unified diff（header 带 `+N −N` 统计与文件数），折叠态每文件保留 6 行 diff、最多展开 3 个文件
+- Read 默认单行；Edit 流式期间逐字展示伪 diff（操作标签 + 红减绿加），完成后换真实 diff；Write 真实跟随参数流自适应逐字显示，默认保留末尾 8 个终端行，常规内容自动语法高亮、超大内容安全回退纯文本；Bash 成功保留尾部最多 8 个终端显示行，失败保留错误 rail；Ctrl+O 展开完整内容
+- Grep / Find（pi 核心工具）同样进 Sakura 卡片：grep 按文件分组、行号右对齐、匹配词高亮、折叠保留 6 个匹配；高亮支持 literal 和无重复结构的简单模式，含分组、字符类或量词的复杂正则使用普通文字显示，搜索结果不受影响；find 复用 ls 双列条目排版、目录带 `▸`、折叠 8 条；header 展示 `/pattern/ in path` 与 glob/-i/limit 等 meta
+- Apply_patch（@xl0/pi-lovely-codex，GPT/Codex 模型）同样进 Sakura 卡片：流式期间着色预览信封尾部 8 行，完成后按 `details.patch` 渲染逐文件 unified diff（header 带 `+N −N` 统计与文件数），折叠态每文件保留最多 6 个终端显示行、最多展开 3 个文件；Edit / Overwrite 的结果 diff 使用同样的显示行预算
 - 运行中卡片标题自带实时秒表：运行满 1s 后显示 `· 5s` / `· 1m 5s`，bash 长命令自动截短保住秒表与 exit meta
 - 助手正文与 Thought trail 保持干净的无包围框布局
 

@@ -76,3 +76,22 @@ test("usage collector resets when session history is replaced", () => {
 		cacheHitRate: 20 / 60 * 100,
 	});
 });
+
+test("会话累计包含压缩、分支总结和工具用量，旧条目无 usage 时跳过", () => {
+	const usage = { input: 10, output: 2, cacheRead: 3, cacheWrite: 1, cost: { total: 0.2 } };
+	const entries = [
+		{ type: "compaction", usage },
+		{ type: "branch_summary", usage },
+		{ type: "message", message: { role: "toolResult", usage } },
+		{ type: "compaction" },
+		{ type: "message", message: { role: "toolResult" } },
+	] as SessionEntry[];
+	const collector = new SessionUsageCollector();
+	const totals = collector.collect(contextFor(entries));
+	assert.equal(totals.input, 30);
+	assert.equal(totals.output, 6);
+	assert.equal(totals.cacheRead, 9);
+	assert.equal(totals.cacheWrite, 3);
+	assert.ok(Math.abs(totals.cost - 0.6) < 1e-10);
+	assert.deepEqual(collector.collect(contextFor(entries)), totals, "重复刷新不能重复计费");
+});

@@ -19,6 +19,152 @@ function jsonResponse(value: unknown, status = 200, headers: Record<string, stri
 	});
 }
 
+function usageContext(id = "a", apiKey = "mock-key"): ExtensionContext {
+	return {
+		model: { provider: "openrouter", id, baseUrl: "https://openrouter.ai/api/v1" },
+		modelRegistry: {
+			getProviderAuth: async () => ({ auth: { apiKey } }),
+			getApiKeyAndHeaders: async () => ({ ok: true, apiKey, headers: {} }),
+		},
+		ui: { setStatus: () => {} },
+	} as unknown as ExtensionContext;
+}
+
+const usageResponse = (remaining = 8): Response => jsonResponse({ data: { limit: 10, limit_remaining: remaining } });
+const nextTurn = (): Promise<void> => new Promise((resolve) => setImmediate(resolve));
+
+function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void; reject: (reason: unknown) => void } {
+	let resolve!: (value: T) => void;
+	let reject!: (reason: unknown) => void;
+	const promise = new Promise<T>((onResolve, onReject) => { resolve = onResolve; reject = onReject; });
+	return { promise, resolve, reject };
+}
+
+test("认证头按大小写无关的规则覆盖，不合并成多个 Bearer", async () => {
+	await fetchProviderUsage("openai-codex", {
+		headers: { authorization: "Bearer mock-token", "chatgpt-account-id": "old-account" }, accountId: "new-account",
+	}, undefined, async (_input, init) => {
+		const headers = new Headers(init?.headers);
+		assert.equal(headers.get("authorization"), "Bearer mock-token");
+		assert.equal(headers.get("chatgpt-account-id"), "new-account");
+		return jsonResponse({ rate_limit: { primary_window: { used_percent: 10 } } });
+	});
+	const ctx = usageContext();
+	ctx.modelRegistry.getProviderAuth = async () => ({ auth: { headers: { Authorization: "Bearer provider" } } }) as never;
+	ctx.modelRegistry.getApiKeyAndHeaders = async () => ({ ok: true, headers: { authorization: "Bearer model" } }) as never;
+	let modelAuthorization: string | null | undefined;
+	await new SubscriptionUsageController(async (_input, init) => {
+		modelAuthorization = new Headers(init?.headers).get("authorization");
+		return usageResponse();
+	}).refresh(ctx, false);
+	assert.equal(modelAuthorization, "Bearer model");
+	await fetchProviderUsage("xai", {
+		headers: { authorization: "Bearer mock-token", "X-Xai-Token-Auth": "stale" },
+	}, undefined, async (input, init) => {
+		assert.equal(new Headers(init?.headers).get("x-xai-token-auth"), "xai-grok-cli");
+		return String(input).includes("format=credits")
+			? jsonResponse({ config: { currentPeriod: { type: "USAGE_PERIOD_TYPE_WEEKLY" }, creditUsagePercent: 5 } })
+			: jsonResponse({ config: { monthlyLimit: { val: 100 }, used: { val: 10 } } });
+	});
+});
+
+test("切到缓存或不支持的模型后，旧额度结果不得重新发布", async () => {
+	for (const useCache of [true, false]) {
+		const response = deferred<Response>();
+		let calls = 0;
+		const controller = new SubscriptionUsageController(async () => ++calls === 1 ? usageResponse() : response.promise);
+		const a = usageContext("a");
+		await controller.refresh(a, false);
+		const pending = controller.refresh(usageContext("b"), false);
+		await nextTurn();
+		await controller.refresh(useCache ? a : { ...a, model: undefined }, false);
+		const selected = controller.getState();
+		response.resolve(usageResponse(1));
+		await pending;
+		assert.deepEqual(controller.getState(), selected);
+	}
+});
+
+test("同一账号的缓存读取不打断强制刷新", async () => {
+	const response = deferred<Response>();
+	let calls = 0;
+	const controller = new SubscriptionUsageController(async () => ++calls === 1 ? usageResponse() : response.promise);
+	const ctx = usageContext();
+	await controller.refresh(ctx, false);
+	const forced = controller.refresh(ctx, true);
+	await nextTurn();
+	assert.equal((await controller.refresh(ctx, false))?.windows[0]?.remaining, 8);
+	response.resolve(usageResponse(3));
+	assert.equal((await forced)?.windows[0]?.remaining, 3);
+	assert.equal(calls, 2);
+});
+
+test("旧认证解析不得覆盖较新的同模型账号", async () => {
+	const auth = deferred<Awaited<ReturnType<ExtensionContext["modelRegistry"]["getApiKeyAndHeaders"]>>>();
+	const old = usageContext("a", "old-key");
+	old.modelRegistry.getApiKeyAndHeaders = () => auth.promise;
+	const tokens: Array<string | null> = [];
+	const controller = new SubscriptionUsageController(async (_input, init) => {
+		tokens.push(new Headers(init?.headers).get("authorization"));
+		return usageResponse();
+	});
+	const pending = controller.refresh(old, false);
+	await nextTurn();
+	await controller.refresh(usageContext("a", "new-key"), false);
+	auth.resolve({ ok: true, apiKey: "old-key", headers: {} });
+	await pending;
+	assert.deepEqual(tokens, ["Bearer new-key"]);
+});
+
+test("模型实时 getter 改变时，不发布等待认证期间的旧模型额度", async () => {
+	const ctx = usageContext();
+	let model = ctx.model;
+	Object.defineProperty(ctx, "model", { get: () => model });
+	const auth = deferred<Awaited<ReturnType<ExtensionContext["modelRegistry"]["getProviderAuth"]>>>();
+	ctx.modelRegistry.getProviderAuth = () => auth.promise;
+	let requests = 0;
+	const controller = new SubscriptionUsageController(async () => { requests++; return usageResponse(); });
+	const pending = controller.refresh(ctx, false);
+	model = usageContext("b").model;
+	auth.resolve({ auth: { apiKey: "mock-key" } } as never);
+	await pending;
+	assert.equal(requests, 0);
+	assert.equal(controller.getState(), undefined);
+});
+
+test("shutdown 作废尚未完成的认证，陈旧 context 不产生拒绝", async () => {
+	for (const reject of [false, true]) {
+		const handlers = new Map<string, (event: unknown, ctx: ExtensionContext) => void>();
+		const auth = deferred<Awaited<ReturnType<ExtensionContext["modelRegistry"]["getProviderAuth"]>>>();
+		const ctx = usageContext();
+		ctx.modelRegistry.getProviderAuth = () => auth.promise;
+		let requests = 0;
+		const controller = new SubscriptionUsageController(async () => { requests++; return usageResponse(); });
+		controller.install({ registerCommand: () => {}, on: (name: string, handler: (event: unknown, ctx: ExtensionContext) => void) => handlers.set(name, handler) } as never);
+		const pending = controller.refresh(ctx, false);
+		handlers.get("session_shutdown")!({}, ctx);
+		if (reject) auth.reject(new Error("auth unavailable"));
+		else auth.resolve({ auth: { apiKey: "mock-key" } } as never);
+		await pending;
+		assert.equal(requests, 0);
+		assert.equal(controller.getState(), undefined);
+		Object.defineProperty(ctx, "model", { get: () => { throw new Error("stale after session replacement or reload"); } });
+		await assert.doesNotReject(controller.refresh(ctx, false));
+	}
+});
+
+test("同一 token 的账号请求头变化时隔离缓存", async () => {
+	let account = "first";
+	let requests = 0;
+	const ctx = usageContext();
+	ctx.modelRegistry.getApiKeyAndHeaders = async () => ({ ok: true, apiKey: "mock-key", headers: { "ChatGPT-Account-Id": account } });
+	const controller = new SubscriptionUsageController(async () => { requests++; return usageResponse(); });
+	await controller.refresh(ctx, false);
+	account = "second";
+	await controller.refresh(ctx, false);
+	assert.equal(requests, 2);
+});
+
 test("Codex normalizer maps primary, secondary and credits", () => {
 	const usage = normalizeCodexUsage({
 		plan_type: "plus",
@@ -139,8 +285,8 @@ test("provider requests use the four official usage contracts", async () => {
 	await fetchProviderUsage("xai", { apiKey: "grok-token", headers: {} }, undefined, fetchImpl);
 
 	assert.equal(calls[0]?.url, "https://chatgpt.com/backend-api/wham/usage");
-	assert.equal(calls[0]?.headers.Authorization, "Bearer codex-token");
-	assert.equal(calls[0]?.headers["ChatGPT-Account-Id"], "acct");
+	assert.equal(new Headers(calls[0]?.headers).get("authorization"), "Bearer codex-token");
+	assert.equal(new Headers(calls[0]?.headers).get("chatgpt-account-id"), "acct");
 	assert.equal(calls[1]?.headers["anthropic-beta"], "oauth-2025-04-20");
 	assert.equal(calls[2]?.url, "https://openrouter.ai/api/v1/key");
 	assert.equal(calls[3]?.headers["x-xai-token-auth"], "xai-grok-cli");

@@ -6,6 +6,7 @@ import { parseUnifiedPatch } from "./apply-patch.ts";
 import { reuseOrCreateText, reuseOrCreateWidthAware } from "./components.ts";
 import { isDiffData, renderDiffLines, reuseOrCreateDiff } from "./diff.ts";
 import { EditCallComponent, reuseOrCreateEditCall } from "./edit-stream.ts";
+import { trailingTextByWidth } from "./stream-animation.ts";
 import { formatLineRange, normalizeLineNumber, renderToolHeader } from "./header.ts";
 import {
 	asThemeLike,
@@ -36,9 +37,6 @@ import {
 } from "./write-stream.ts";
 
 const HASHLINE_RE = /^(\d+):([0-9a-fA-F]+)\|(.*)$/;
-/** 短 bash：不超过此行数时折叠态也整段展示。 */
-const BASH_SHORT_MAX_LINES = 8;
-const BASH_SHORT_MAX_CHARS = 2_000;
 /** 长 bash 折叠态预览行数，与 write/edit/apply_patch 预览行数对齐。 */
 const BASH_COLLAPSED_PREVIEW_LINES = 8;
 /** pi 原生 read 尾部续读通知：`[Showing lines A-B of N …]` 或 `[N more lines in file …]`。 */
@@ -249,25 +247,26 @@ function renderToolError(
 	meta: readonly string[] = [],
 	collapsedTail = 0,
 ): Component {
-	const [first = `${name} failed`, ...rest] = body.split("\n");
+	const outputLines = body.split("\n");
+	const first = outputLines[0] || `${name} failed`;
 	const expanded = isExpanded(options, context);
-	const visibleRest = expanded ? rest : collapsedTail > 0 ? rest.slice(-collapsedTail) : [];
-	const hidden = Math.max(0, rest.length - visibleRest.length);
-	const header = renderToolHeader(name, context.args, presentation, context, {
-		phase: "error",
-		meta: [...meta, first || `${name} failed`],
-		expandable: hidden > 0,
+	return reuseOrCreateWidthAware(context.lastComponent, (width) => {
+		const prefix = presentation.mode === "screen-reader" ? "output: " : styleText(presentation, "error", "┃ ");
+		// 首行也可能是压缩 JSON 或长诊断，完整输出统一进入正文，标题仅保留摘要。
+		const preview = expanded ? {
+			rows: outputLines.flatMap((line) => wrapWithHangingIndent(prefix, styleText(presentation, "toolOutput", line), width)),
+			shown: outputLines.length, clipped: false,
+		} : renderOutputTail(outputLines, prefix, presentation, width, collapsedTail);
+		const hasHidden = preview.shown < outputLines.length || preview.clipped;
+		const header = renderToolHeader(name, context.args, presentation, context, {
+			phase: "error",
+			meta: [...meta, truncateToWidth(first, width, "…")],
+			expandable: hasHidden,
+		});
+		return [header, ...preview.rows, ...(hasHidden && preview.rows.length > 0 ? [preview.clipped
+			? styleText(presentation, "dim", "… more output · Ctrl+O")
+			: collapsedHint(preview.shown, outputLines.length, "error lines", true, presentation)] : [])];
 	});
-	if (visibleRest.length === 0) return reuseOrCreateText(context.lastComponent, header);
-	return reuseOrCreateWidthAware(context.lastComponent, (width) => [
-		header,
-		...visibleRest.flatMap((line) => wrapWithHangingIndent(
-			presentation.mode === "screen-reader" ? "output: " : styleText(presentation, "error", "┃ "),
-			styleText(presentation, "toolOutput", line),
-			width,
-		)),
-		...(hidden > 0 ? [collapsedHint(visibleRest.length, rest.length, "error lines", true, presentation)] : []),
-	]);
 }
 
 export function renderReadResult(
@@ -458,9 +457,9 @@ export function renderWriteResult(
 		return renderPreview(header, visibleErrors);
 	}
 
-	const state = details.writeState === "overwritten" ? "overwrite" : "create";
-	if (state === "create") {
-		const header = renderToolHeader("create", context.args, p, context, {
+	const state = details.writeState === "overwritten" ? "overwrite" : details.writeState === "created" ? "create" : "write";
+	if (state !== "overwrite") {
+		const header = renderToolHeader(state, context.args, p, context, {
 			phase: "success",
 			meta: [lineMeta, ...warnings],
 			expandable: content.length > 0 && !expanded,
@@ -486,6 +485,32 @@ export function renderWriteResult(
 		expanded,
 		presentation: p,
 	});
+}
+
+/** 从尾部按显示行取预览，先裁长行再换行，避免压缩 JSON 等撑满折叠卡片。 */
+function renderOutputTail(
+	lines: string[],
+	prefix: string,
+	presentation: RenderPresentation,
+	width: number,
+	maxRows: number,
+): { rows: string[]; shown: number; clipped: boolean } {
+	const rows: string[] = [];
+	const contentWidth = Math.max(1, width - visibleWidth(prefix));
+	let shown = 0;
+	let clipped = false;
+	for (let index = lines.length - 1; index >= 0 && rows.length < maxRows; index--) {
+		const line = lines[index]!;
+		const remaining = maxRows - rows.length;
+		const totalWidth = visibleWidth(line);
+		const budget = (totalWidth % contentWidth || contentWidth) + contentWidth * (remaining - 1);
+		const tail = totalWidth > contentWidth * remaining ? trailingTextByWidth(line, budget) : line;
+		const wrapped = wrapWithHangingIndent(prefix, styleText(presentation, "toolOutput", tail), width);
+		clipped ||= tail !== line || wrapped.length > remaining;
+		rows.unshift(...wrapped.slice(-remaining));
+		shown++;
+	}
+	return { rows, shown, clipped };
 }
 
 export function renderBashResult(
@@ -522,20 +547,20 @@ export function renderBashResult(
 
 	const lines = body.replace(/\n+$/, "").split("\n");
 	const lineCount = lines.length;
-	const short = lineCount <= BASH_SHORT_MAX_LINES && body.length <= BASH_SHORT_MAX_CHARS;
-	const visible = expanded || short ? lines : lines.slice(-BASH_COLLAPSED_PREVIEW_LINES);
-	const header = renderToolHeader("bash", context.args, p, context, {
-		phase: "success",
-		meta: [`${lineCount} ${lineCount === 1 ? "line" : "lines"}`],
-		expandable: !expanded && !short,
+	return reuseOrCreateWidthAware(context.lastComponent, (width) => {
+		const prefix = p.mode === "screen-reader" ? "output: " : styleText(p, "dim", "│ ");
+		const preview = expanded ? { rows: renderOutput(lines, width), shown: lineCount, clipped: false }
+			: renderOutputTail(lines, prefix, p, width, BASH_COLLAPSED_PREVIEW_LINES);
+		const hidden = preview.shown < lineCount || preview.clipped;
+		const header = renderToolHeader("bash", context.args, p, context, {
+			phase: "success",
+			meta: [`${lineCount} ${lineCount === 1 ? "line" : "lines"}`],
+			expandable: hidden,
+		});
+		return [header, ...preview.rows, ...(hidden ? [preview.clipped
+			? styleText(p, "dim", "… more output · Ctrl+O")
+			: collapsedHint(preview.shown, lineCount, "lines", true, p)] : [])];
 	});
-	return reuseOrCreateWidthAware(context.lastComponent, (width) => [
-		header,
-		...renderOutput(visible, width),
-		...(!expanded && !short && visible.length < lineCount
-			? [collapsedHint(visible.length, lineCount, "lines", true, p)]
-			: []),
-	]);
 }
 
 function lsEntryLines(
@@ -599,13 +624,14 @@ export function renderLsResult(
 	const details = asRecord(result.details);
 	const ptc = asRecord(details?.ptcValue);
 	const entries = Array.isArray(ptc?.entries) ? ptc.entries : [];
-	const outputLines = body ? body.split("\n").filter((line) => line.length > 0) : [];
+	const nativeBody = body === "(empty directory)" ? "" : stripTrailingNotice(body);
+	const outputLines = nativeBody ? nativeBody.split("\n").filter((line) => line.length > 0) : [];
 	const total = typeof ptc?.totalEntries === "number"
 		? ptc.totalEntries
 		: entries.length > 0
 			? entries.length
 			: outputLines.length;
-	const truncated = Boolean(ptc?.truncated);
+	const truncated = Boolean(ptc?.truncated || details?.entryLimitReached || asRecord(details?.truncation)?.truncated);
 	if (total === 0 && entries.length === 0) {
 		return reuseOrCreateText(context.lastComponent, renderToolHeader("ls", context.args, p, context, {
 			phase: "success",
@@ -630,7 +656,7 @@ export function renderLsResult(
 		const hidden = Math.max(0, total - shown);
 		const header = renderToolHeader("ls", context.args, p, context, {
 			phase: "success",
-			meta: [`${total} ${total === 1 ? "entry" : "entries"}`],
+			meta: [`${total} ${total === 1 ? "entry" : "entries"}`, ...(truncated ? ["truncated"] : [])],
 			expandable: !expanded && (hidden > 0 || truncated),
 		});
 		return [
@@ -645,7 +671,7 @@ export function renderLsResult(
 
 // ─── grep / find ─────────────────────────────────────────────────
 
-/** grep / find 把截断提示以 `\n\n[...]` 追加在正文尾部；剥离后只保留 meta 徽章。 */
+/** grep / find / ls 把截断提示以 `\n\n[...]` 追加在正文尾部；剥离后只保留 meta 徽章。 */
 function stripTrailingNotice(body: string): string {
 	const match = /\n\n\[[^\n]*\]$/.exec(body);
 	return match ? body.slice(0, match.index) : body;
@@ -674,16 +700,13 @@ function escapeRegExpLiteral(value: string): string {
 	return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-/**
- * 匹配词高亮用的 JS 正则。rg 的 DFA 引擎没有回溯，而 `(a+)+` 这类嵌套量词在
- * JS 回溯引擎上可能指数爆炸，保守启发式命中时直接放弃高亮（只降级、不冒险）。
- */
+/** 只高亮无重复结构的简单模式；分组、字符类和量词交由 rg 搜索，正文降级为纯色。 */
 function grepHighlightRegex(args: unknown): RegExp | undefined {
 	const record = asRecord(args);
 	const pattern = typeof record?.pattern === "string" ? record.pattern : "";
 	if (pattern.length === 0 || pattern.length > 200) return undefined;
 	const source = record?.literal === true ? escapeRegExpLiteral(pattern) : pattern;
-	if (record?.literal !== true && /[+*?}][)\]]*[+*{]/.test(source)) return undefined;
+	if (record?.literal !== true && !/^(?:[^\\()[\]{}*+?]|\\[\\^$.*+?()[\]{}|/bBdDsSwWnrtfv])+$/.test(source)) return undefined;
 	try {
 		return new RegExp(source, record?.ignoreCase === true ? "gi" : "g");
 	} catch {

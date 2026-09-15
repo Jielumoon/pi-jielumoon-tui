@@ -1,4 +1,4 @@
-import type { AssistantMessage } from "@earendil-works/pi-ai";
+import type { Usage } from "@earendil-works/pi-ai";
 import { type ExtensionContext, type SessionEntry } from "@earendil-works/pi-coding-agent";
 import type { ModelSnapshot, UsageTotals } from "./types.ts";
 
@@ -41,14 +41,17 @@ export class SessionUsageCollector {
 
 		for (let index = this.entryCount; index < entries.length; index++) {
 			const entry = entries[index]!;
-			if (entry.type !== "message" || entry.message.role !== "assistant") continue;
-
-			const message = entry.message as AssistantMessage;
-			this.totals.input += message.usage.input;
-			this.totals.output += message.usage.output;
-			this.totals.cacheRead += message.usage.cacheRead;
-			this.totals.cacheWrite += message.usage.cacheWrite;
-			this.totals.cost += message.usage.cost.total;
+			let usage: Usage | undefined;
+			if (entry.type === "compaction" || entry.type === "branch_summary") usage = entry.usage;
+			else if (entry.type === "message" && (entry.message.role === "assistant" || entry.message.role === "toolResult")) {
+				usage = entry.message.usage;
+			}
+			if (!usage) continue;
+			this.totals.input += usage.input;
+			this.totals.output += usage.output;
+			this.totals.cacheRead += usage.cacheRead;
+			this.totals.cacheWrite += usage.cacheWrite;
+			this.totals.cost += usage.cost.total;
 		}
 
 		this.entryCount = entries.length;

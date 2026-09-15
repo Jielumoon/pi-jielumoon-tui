@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import test from "node:test";
 import { ToolExecutionComponent, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import installReadmapRenderers, { patchReadmapTool, READMAP_RENDERER_MARK } from "../src/readmap-renderers/index.ts";
@@ -276,6 +277,22 @@ test("grep highlight degrades safely on hostile patterns", () => {
 
 	const caseless = render("value", "src/a.ts:1: VALUE", { ignoreCase: true });
 	assert.match(caseless, /«accent:VALUE»/);
+});
+
+test("grep 歧义分支不会在渲染线程触发指数回溯", () => {
+	const source = new URL("../src/readmap-renderers/results.ts", import.meta.url).href;
+	const probe = spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", `
+		import { renderGrepResult } from ${JSON.stringify(source)};
+		const text = "a".repeat(40) + "!";
+		const component = renderGrepResult(
+			{ content: [{ type: "text", text: "a.ts:1: " + text }] },
+			{ expanded: false }, { fg: (_, value) => value },
+			{ args: { pattern: "(a|aa)+$|!" } },
+		);
+		if (!component.render(80).join("\\n").includes(text)) process.exit(1);
+	`], { encoding: "utf8", timeout: 5_000, env: { ...process.env, PI_READMAP_RENDER_MODE: "color" } });
+	assert.equal(probe.error, undefined, "复杂正则必须安全降级，不能阻塞渲染");
+	assert.equal(probe.status, 0, probe.stderr);
 });
 
 test("find renders entries like ls with collapse and dir markers", () => {

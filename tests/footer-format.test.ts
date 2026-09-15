@@ -94,6 +94,17 @@ test("footer segments fit at narrow widths without overflowing", () => {
 	assert.ok(lines.every((line) => visibleWidth(line) <= 13));
 });
 
+test("完整 Footer 在极窄终端和仅计时状态下也不溢出", () => {
+	for (const width of Array.from({ length: 40 }, (_, index) => index + 1)) {
+		for (const usage of [snapshot.usage, { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, cacheHitRate: undefined }]) {
+			const lines = renderFooter({ ...snapshot, usage }, DEFAULT_FOOTER_SETTINGS, {
+				branch: "main", extensionStatuses: new Map(),
+			}, width, theme, icons);
+			assert.ok(lines.every((line) => visibleWidth(line) <= width), `Footer 超过 ${width} 列`);
+		}
+	}
+});
+
 test("nano context uses a compact foreground gauge without full-width backgrounds", () => {
 	const context: ContextSnapshot = {
 		segments: { system: 8_000, prompt: 6_000, assistant: 5_000, thinking: 3_000, tools: 5_520 },
@@ -129,6 +140,7 @@ test("nano context follows the shared Footer context setting", () => {
 		getSystemPrompt: () => "",
 		getContextUsage: () => ({ tokens: 100, contextWindow: 1_000, percent: 10 }),
 		model: { contextWindow: 1_000 },
+		sessionManager: { getEntries: () => [] },
 		ui: {
 			theme: theme as never,
 			setWidget: (_key: string, factory: unknown) => {
@@ -149,6 +161,39 @@ test("tool background setting defaults off and exposes the command alias", () =>
 	assert.ok(definition);
 	assert.equal(DEFAULT_FOOTER_SETTINGS.toolBackground, false);
 	assert.deepEqual(definition.aliases, ["tool-bg"]);
+});
+
+test("上下文结束刷新保留变换后的历史，并只追加最近一次 context 之后的消息", () => {
+	const handlers = new Map<string, (event: unknown, ctx: unknown) => void>();
+	let widget: { render(width: number): string[] };
+	const entries: Array<Record<string, unknown>> = [];
+	const ctx = {
+		hasUI: true,
+		getSystemPrompt: () => "",
+		getContextUsage: () => undefined,
+		model: { contextWindow: 1_000 },
+		sessionManager: { getEntries: () => entries },
+		ui: { theme, setWidget: (_key: string, factory: (tui: unknown, theme: unknown) => typeof widget) => { widget = factory({}, theme); } },
+	};
+	installNanoContext({ on: (name: string, handler: (event: unknown, ctx: unknown) => void) => handlers.set(name, handler) } as never, { context: true });
+	const append = (role: string, text: string): unknown => {
+		const message = { role, content: [{ type: "text", text }], timestamp: entries.length };
+		entries.push({ type: "message", id: String(entries.length), parentId: entries.at(-1)?.id ?? null, message });
+		return message;
+	};
+	append("user", "hidden history".repeat(100));
+	const prompt = append("user", "x".repeat(40));
+	handlers.get("context")!({ messages: structuredClone([prompt]) }, ctx);
+	const answer = append("assistant", "a".repeat(2_000));
+	handlers.get("agent_end")!({ messages: [prompt, answer] }, ctx);
+	assert.match(widget!.render(80).join(""), /51\.0%/);
+	handlers.get("model_select")!({}, ctx);
+	assert.match(widget!.render(80).join(""), /51\.0%/, "再次刷新不应重复追加");
+	const tool = append("toolResult", "t".repeat(40));
+	handlers.get("context")!({ messages: structuredClone([prompt, answer, tool]) }, ctx);
+	const finalAnswer = append("assistant", "z".repeat(40));
+	handlers.get("agent_end")!({ messages: [prompt, answer, tool, finalAnswer] }, ctx);
+	assert.match(widget!.render(80).join(""), /53\.0%/, "不能把 agent_end 的整个增量再次拼接");
 });
 
 

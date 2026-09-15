@@ -1,7 +1,7 @@
 /** edit / overwrite 的 diff 正文：unified / split / compact / summary 四种宽度模式。 */
 
 import type { Component } from "@earendil-works/pi-tui";
-import { visibleWidth } from "@earendil-works/pi-tui";
+import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { asRecord } from "../guards.ts";
 import {
 	asThemeLike,
@@ -18,7 +18,7 @@ import {
 	type ThemeLike,
 } from "./presentation.ts";
 
-/** edit/write diff 折叠态最多展示的变更行。 */
+/** edit/write diff 折叠态最多展示的终端行（不含展开提示）。 */
 const DIFF_COLLAPSED_PREVIEW_LINES = 6;
 const SPLIT_DIFF_MIN_WIDTH = 120;
 const SUMMARY_DIFF_MAX_WIDTH = 23;
@@ -118,6 +118,19 @@ export function renderDiffLines(
 	);
 	const rows: string[] = [];
 	let shown = 0;
+	let clipped = false;
+	const wrapEntry = (prefix: string, body: string, width: number): string[] => {
+		if (expanded) return wrapWithHangingIndent(prefix, body, width);
+		const remaining = Math.max(0, DIFF_COLLAPSED_PREVIEW_LINES - rows.length);
+		const budget = Math.max(1, width - visibleWidth(prefix)) * remaining;
+		if (visibleWidth(body) > budget) {
+			body = truncateToWidth(body, budget, "");
+			clipped = true;
+		}
+		const wrapped = wrapWithHangingIndent(prefix, body, width);
+		clipped ||= wrapped.length > remaining;
+		return wrapped.slice(0, remaining);
+	};
 	const splitPairs = new Map<number, number>();
 	const splitPairTargets = new Set<number>();
 	if (mode === "split" && Array.isArray(diffData.inlineDiffs)) {
@@ -217,8 +230,8 @@ export function renderDiffLines(
 					? `▌${marker} ${number} `
 					: `▌${marker} ${number} │ `;
 		const body = inlineText(index, entry);
-			const wrapped = wrapWithHangingIndent(prefix, body, w);
-			rows.push(...wrapped.map((line) => tintEntry(p, entry, line)));
+		const wrapped = wrapEntry(prefix, body, w);
+		rows.push(...wrapped.map((line) => tintEntry(p, entry, line)));
 	};
 	const addSplit = (
 		leftIndex: number,
@@ -239,10 +252,10 @@ export function renderDiffLines(
 		const oldPrefix = `▌${oldMarker} ${padStartVisible(oldEntry ? String(oldEntry.oldLine) : "", oldLineNumberWidth)} │ `;
 		const newPrefix = `▌${newMarker} ${padStartVisible(currentEntry ? String(currentEntry.newLine) : "", newLineNumberWidth)} │ `;
 		const oldLines = oldEntry
-			? wrapWithHangingIndent(oldPrefix, oldBody, paneWidth).map((line) => tintEntry(p, oldEntry, line))
+			? wrapEntry(oldPrefix, oldBody, paneWidth).map((line) => tintEntry(p, oldEntry, line))
 			: [];
 		const newLines = currentEntry
-			? wrapWithHangingIndent(newPrefix, newBody, paneWidth).map((line) => tintEntry(p, currentEntry, line))
+			? wrapEntry(newPrefix, newBody, paneWidth).map((line) => tintEntry(p, currentEntry, line))
 			: [];
 		const rowsToRender = Math.max(oldLines.length, newLines.length, 1);
 		for (let row = 0; row < rowsToRender; row++) {
@@ -260,19 +273,20 @@ export function renderDiffLines(
 				entry.kind === "meta" ||
 				(mode === "compact" && entry.kind === "context")
 			) continue;
-			if (!expanded && shown >= DIFF_COLLAPSED_PREVIEW_LINES) break;
+			if (!expanded && rows.length >= DIFF_COLLAPSED_PREVIEW_LINES) break;
 
 			const pairedAddIndex = mode === "split" && entry.kind === "remove"
 				? splitPairs.get(index)
 				: undefined;
 			const pairedAdd = pairedAddIndex === undefined ? undefined : diffData.entries[pairedAddIndex];
 			const hasPair = pairedAdd?.kind === "add";
-			if (hasPair && !expanded && shown + 2 > DIFF_COLLAPSED_PREVIEW_LINES) break;
 
 			const labels = [hunkLabel(entry), hasPair ? hunkLabel(pairedAdd) : undefined];
 			for (const label of new Set(labels.filter((item): item is string => item !== undefined))) {
+				if (!expanded && rows.length >= DIFF_COLLAPSED_PREVIEW_LINES) break;
 				rows.push(clampLine(label, w));
 			}
+			if (!expanded && rows.length >= DIFF_COLLAPSED_PREVIEW_LINES) break;
 			if (hasPair && pairedAddIndex !== undefined) {
 				addSplit(index, entry, pairedAddIndex, pairedAdd);
 				consumedSplitEntries.add(pairedAddIndex);
@@ -286,8 +300,9 @@ export function renderDiffLines(
 			}
 		}
 	}
-	if (!expanded && renderable.length > shown) {
-		rows.push(clampLine(collapsedHint(shown, renderable.length, "diff lines", true, p), w));
+	if (!expanded && (renderable.length > shown || clipped)) {
+		rows.push(clampLine(clipped ? styleText(p, "dim", "… more diff content · Ctrl+O")
+			: collapsedHint(shown, renderable.length, "diff lines", true, p), w));
 	}
 	return clampLines(rows, w);
 }

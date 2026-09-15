@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { BashExecutionComponent, ToolExecutionComponent, UserMessageComponent, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { BashExecutionComponent, ToolExecutionComponent, UserMessageComponent, initTheme, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import installReadmapRenderers, {
 	DiffBodyComponent,
@@ -12,6 +12,7 @@ import installReadmapRenderers, {
 } from "../src/readmap-renderers/index.ts";
 import { installMessageBorders } from "../src/message-borders.ts";
 import { resolveRenderMode } from "../src/render-mode.ts";
+import { renderBashResult, renderLsResult, renderWriteResult } from "../src/readmap-renderers/results.ts";
 
 // 测试基线固定为 color 模式：宿主终端的 NO_COLOR/TERM 不得改变断言结果。
 // 显式 plain / screen-reader 用例仍通过 withEnv 覆盖 PI_READMAP_RENDER_MODE。
@@ -27,6 +28,63 @@ const theme = {
 	fg: (_color: string, text: string) => text,
 	bold: (text: string) => text,
 };
+
+test("用户卡保留原始编号和反斜杠", () => {
+	initTheme("dark");
+	const cleanup = installMessageBorders(() => undefined);
+	try {
+		const rendered = new UserMessageComponent("3. third\n9. ninth\n\nUse \\* to escape").render(80).map(stripAnsi).join("\n");
+		assert.match(rendered, /9\. ninth/);
+		assert.match(rendered, /Use \\\* to escape/);
+	} finally {
+		cleanup();
+	}
+});
+
+test("原生 write 缺少创建元数据时显示 Write", () => {
+	const rendered = renderWriteResult({ content: [{ type: "text", text: "Successfully wrote 1 bytes to existing.txt" }] },
+		{ expanded: false }, theme, { args: { path: "existing.txt", content: "x" } }).render(80).map(stripAnsi).join("\n");
+	assert.match(rendered, /Write {2}existing\.txt/);
+	assert.doesNotMatch(rendered, /Create|Overwrite/);
+});
+
+test("原生 ls 区分空目录、文件名和截断通知", () => {
+	const render = (text: string, details?: unknown) => renderLsResult({ content: [{ type: "text", text }], details },
+		{ expanded: true }, theme, { args: { path: "." } }).render(100).map(stripAnsi).join("\n");
+	assert.match(render("(empty directory)"), /· empty/);
+	const truncated = render("a.txt\n\n[1 entries limit reached. Use limit=2 for more]", { entryLimitReached: 1 });
+	assert.match(truncated, /1 entry · truncated/);
+	assert.doesNotMatch(truncated, /limit reached/);
+	assert.match(render("[actual-file]"), /1 entry/);
+});
+
+test("折叠 Bash 和 diff 限制长单行的显示高度，展开仍保留全文", () => {
+	const text = "x".repeat(20_000) + "TAIL";
+	const result = { content: [{ type: "text", text }] };
+	const collapsed = renderBashResult(result, { expanded: false }, theme, {}).render(80).map(stripAnsi);
+	assert.ok(collapsed.length <= 10);
+	assert.ok(collapsed.some((line) => line.includes("TAIL")));
+	assert.match(collapsed.join("\n"), /Ctrl\+O/);
+	assert.ok(renderBashResult(result, { expanded: true }, theme, {}).render(80).length > 200);
+	for (const output of [text, `failed\n${text}`, `${text}\n\nCommand exited with code 1`]) {
+		const result = { content: [{ type: "text", text: output }], isError: true };
+		const failure = renderBashResult(result, { expanded: false }, theme, {}).render(80).map(stripAnsi);
+		assert.ok(failure.length <= 8);
+		assert.ok(failure.some((line) => line.includes("TAIL")));
+		const full = renderBashResult(result, { expanded: true }, theme, {}).render(80).map(stripAnsi);
+		assert.ok(full.length > 200);
+		assert.ok(full.some((line) => line.includes("TAIL")));
+	}
+	for (const width of [40, 80, 140]) {
+		const options = { diffData: { stats: { added: 1, removed: 1 }, entries: [
+			{ kind: "remove" as const, oldLine: 1, text }, { kind: "add" as const, newLine: 1, text },
+		] }, theme };
+		const preview = new DiffBodyComponent({ ...options, expanded: false }).render(width).map(stripAnsi);
+		assert.ok(preview.length <= 7, `diff 在 ${width} 列超过折叠预算`);
+		assert.match(preview.join("\n"), /Ctrl\+O/);
+		assert.ok(new DiffBodyComponent({ ...options, expanded: true }).render(width).length > 200);
+	}
+});
 
 type MockTool = {
 	name: string;

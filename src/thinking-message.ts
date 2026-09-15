@@ -1,5 +1,5 @@
 import { AssistantMessageComponent, type Theme } from "@earendil-works/pi-coding-agent";
-import { type Component, truncateToWidth } from "@earendil-works/pi-tui";
+import { type Component, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { removeTrailingPadding, stripAnsi } from "./ansi";
 import {
 	renderSakuraGradient,
@@ -141,8 +141,7 @@ class ThinkingTrailComponent implements Component {
 		if (!theme) return this.inner.render(width);
 		if (this.cachedWidth === width && this.cachedTheme === theme && this.cachedLines !== undefined) return this.cachedLines;
 
-		// "├─ ◇ " / "│    " ≈ 6 cols
-		const prefixWidth = 6;
+		const prefixWidth = visibleWidth("  ╰─ ◇ ");
 		const contentWidth = Math.max(1, Math.min(width - prefixWidth, MAX_BODY_WIDTH));
 		const rawLines = this.inner.render(contentWidth);
 
@@ -241,7 +240,7 @@ function recolorHiddenThinkingLines(lines: string[]): string[] {
 }
 
 export function installThinkingMessageStyle(getTheme: () => Theme | undefined): Cleanup {
-	const cleanupContent = installPrototypePatch(
+	return installPrototypePatch(
 		AssistantMessageComponent.prototype,
 		"updateContent",
 		"assistant-thinking-content",
@@ -251,32 +250,18 @@ export function installThinkingMessageStyle(getTheme: () => Theme | undefined): 
 			const children = runtime.contentContainer?.children;
 			const message = args[0] as AssistantMessageLike | undefined;
 			if (!children || !message) return result;
-			if (runtime.hideThinkingBlock) return result;
-
 			for (const index of thinkingChildIndices(message)) {
 				const child = children[index];
-				if (child) children[index] = new ThinkingTrailComponent(child, getTheme);
+				if (!child) continue;
+				// 仅包装已识别的思考子组件，正文里同名标签保持原样。
+				children[index] = runtime.hideThinkingBlock ? {
+					render: (width) => recolorHiddenThinkingLines(child.render(width)),
+					invalidate: () => child.invalidate(),
+				} : new ThinkingTrailComponent(child, getTheme);
 			}
 			return result;
 		},
 	);
-
-	const cleanupRender = installPrototypePatch(
-		AssistantMessageComponent.prototype,
-		"render",
-		"assistant-thinking-hidden-render",
-		({ predecessor, receiver, args }) => {
-			const rendered = Reflect.apply(predecessor, receiver, args);
-			if (!Array.isArray(rendered) || !rendered.every((line) => typeof line === "string")) return rendered;
-			// Collapsed placeholders + any leftover plain "Thinking..." lines.
-			return recolorHiddenThinkingLines(rendered);
-		},
-	);
-
-	return () => {
-		cleanupRender();
-		cleanupContent();
-	};
 }
 
 export const SAKURA_HIDDEN_THINKING_LABEL = HIDDEN_LABEL_PLAIN; // "✦ Thought"

@@ -2,6 +2,7 @@ import {
 	buildSessionContext,
 	type ExtensionAPI,
 	type ExtensionContext,
+	type SessionEntry,
 	type Theme,
 } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
@@ -272,9 +273,14 @@ const updateUi = (
 
 export default function nanoContext(pi: ExtensionAPI, settings: Pick<FooterSettings, "context">): void {
 	let activeMessages: readonly unknown[] | undefined;
+	let activeEntryCount = 0;
+	let activeLastEntry: SessionEntry | undefined;
 
 	const refreshFromMessages = (ctx: ExtensionContext, messages: readonly unknown[]): void => {
 		activeMessages = messages;
+		const entries = ctx.sessionManager.getEntries();
+		activeEntryCount = entries.length;
+		activeLastEntry = entries.at(-1);
 		updateUi(ctx, messages, settings);
 	};
 
@@ -283,8 +289,16 @@ export default function nanoContext(pi: ExtensionAPI, settings: Pick<FooterSetti
 	};
 
 	const refreshFromActiveMessages = (ctx: ExtensionContext): void => {
-		if (activeMessages) refreshFromMessages(ctx, activeMessages);
-		else refreshFromSession(ctx);
+		const entries = ctx.sessionManager.getEntries();
+		const prefixIsStable = activeEntryCount <= entries.length
+			&& (activeEntryCount === 0 || entries[activeEntryCount - 1] === activeLastEntry);
+		if (!activeMessages || !prefixIsStable) {
+			refreshFromSession(ctx);
+			return;
+		}
+		// context 已经过其它扩展变换；仅追加快照之后持久化的消息，不重新引入被裁掉的历史。
+		const appended = buildSessionContext(entries.slice(activeEntryCount)).messages;
+		refreshFromMessages(ctx, [...activeMessages, ...appended]);
 	};
 
 	pi.on("session_start", (_event, ctx) => refreshFromSession(ctx));
@@ -300,5 +314,7 @@ export default function nanoContext(pi: ExtensionAPI, settings: Pick<FooterSetti
 	pi.on("session_shutdown", (_event, ctx) => {
 		ctx.ui.setWidget(WIDGET_KEY, undefined, { placement: "belowEditor" });
 		activeMessages = undefined;
+		activeEntryCount = 0;
+		activeLastEntry = undefined;
 	});
 }
