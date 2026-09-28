@@ -102,6 +102,33 @@ test("Sakura Editor preserves Pi scrolling and app-level key handling", () => {
 	assert.ok(lines.every((line) => visibleWidth(line) === 32));
 });
 
+test("Sakura Editor 把宿主状态嵌进上边框，清除后恢复普通边框", () => {
+	const status = {
+		renderInBorder: () => "\x1b[35m⠋\x1b[39m Working · 12s",
+		renderSpinnerInBorder: () => "\x1b[35m⠋\x1b[39m",
+	};
+	const editor = createEditor();
+	// Pi ≥0.85 靠这两项 duck-type 识别，缺一项就退回独立状态行（结束后留白）。
+	assert.equal(editor.embedWorkingStatus, true);
+	assert.equal(typeof editor.setWorkingStatusIndicator, "function");
+
+	editor.setWorkingStatusIndicator(status);
+	const top = editor.render(32)[0] ?? "";
+	assert.equal(stripAnsi(top), `╭─ ⠋ Working · 12s ${"─".repeat(12)}╮`);
+	assert.ok(top.includes("\x1b[35m⠋\x1b[39m"), "状态保留自身配色");
+	assert.equal(stripAnsi(editor.render(12)[0] ?? ""), "╭─ ⠋ ──────╮", "放不下完整状态时只留 spinner");
+	for (const width of [7, 8, 10, 20, 40, 80]) {
+		assert.ok(editor.render(width).every((line) => visibleWidth(line) === width));
+	}
+
+	editor.setText(Array.from({ length: 20 }, (_value, index) => `line ${index + 1}`).join("\n"));
+	assert.match(stripAnsi(editor.render(48)[0] ?? ""), /^╭─ ⠋ Working · 12s ─── ↑ \d+ more ─+╮$/);
+
+	editor.setWorkingStatusIndicator(undefined);
+	editor.setText("");
+	assert.equal(stripAnsi(editor.render(32)[0] ?? ""), `╭${"─".repeat(30)}╮`);
+});
+
 type Handler = (event: unknown, ctx: ExtensionContext) => unknown;
 
 type EditorHarness = {

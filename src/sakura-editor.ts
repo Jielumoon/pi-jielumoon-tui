@@ -6,13 +6,20 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth, type EditorTheme, type TUI } from "@earendil-works/pi-tui";
 import { stripAnsi } from "./ansi.ts";
-import { renderSakuraFrameGradient, renderSakuraSolid } from "./gradient.ts";
+import { renderSakuraFrameGradient, renderSakuraFrameSegment, renderSakuraSolid } from "./gradient.ts";
 
 const FRAME_CHROME_WIDTH = 4;
 const MIN_CONTENT_WIDTH = 3;
 const MIN_FRAME_WIDTH = FRAME_CHROME_WIDTH + MIN_CONTENT_WIDTH;
+const SCROLL_LABEL = /^─*\s*([↑↓]\s+\d+\s+more)\s*─*$/;
 
 type EditorFactory = NonNullable<ReturnType<ExtensionContext["ui"]["getEditorComponent"]>>;
+
+/** 宿主 StatusIndicator 暴露给边框的渲染接口。 */
+type BorderStatus = {
+	renderInBorder(width: number): string;
+	renderSpinnerInBorder?(width: number): string;
+};
 
 function fitLine(line: string, width: number): string {
 	const clipped = truncateToWidth(line, Math.max(0, width), "");
@@ -36,14 +43,19 @@ function findBottomBorderIndex(lines: readonly string[]): number {
 	return Math.max(0, lines.length - 1);
 }
 
-function roundedBorder(width: number, edge: "top" | "bottom", sourceLine?: string): string {
+function roundedBorder(width: number, edge: "top" | "bottom", sourceLine?: string, status?: BorderStatus): string {
 	if (width <= 0) return "";
 	if (width === 1) return renderSakuraSolid(edge === "top" ? "╭" : "╰");
 
 	const [leftCorner, rightCorner] = edge === "top" ? ["╭", "╮"] : ["╰", "╯"];
 	const innerWidth = width - 2;
 	const plainSource = sourceLine === undefined ? "" : stripAnsi(sourceLine);
-	const scrollMatch = plainSource.match(/^─*\s*([↑↓]\s+\d+\s+more)\s*─*$/);
+	const scrollMatch = plainSource.match(SCROLL_LABEL);
+
+	if (status) {
+		const embedded = statusTopBorder(width, scrollMatch?.[1], status);
+		if (embedded) return embedded;
+	}
 
 	if (scrollMatch?.[1]) {
 		const prefix = `─── ${scrollMatch[1]} `;
@@ -53,6 +65,26 @@ function roundedBorder(width: number, edge: "top" | "bottom", sourceLine?: strin
 	}
 
 	return renderSakuraFrameGradient(`${leftCorner}${"─".repeat(innerWidth)}${rightCorner}`);
+}
+
+/**
+ * `╭─ ⠋ Working · 12s ─── ↑ 3 more ───╮`：状态保留自身配色，两侧边框按整条连续渐变。
+ * 放不下完整状态时退到只有 spinner；连 spinner 都放不下则交回普通边框。
+ */
+function statusTopBorder(width: number, scroll: string | undefined, status: BorderStatus): string | undefined {
+	const head = "╭─ ";
+	const gap = scroll ? ` ─── ${scroll} ` : " ";
+	// 右侧至少留一格横线和右角。
+	const budget = width - visibleWidth(head) - visibleWidth(gap) - 2;
+	if (budget < 1) return undefined;
+	let inset = status.renderInBorder(width);
+	if (visibleWidth(inset) > budget) inset = status.renderSpinnerInBorder?.(budget) ?? "";
+	inset = truncateToWidth(inset, budget, "");
+	const insetWidth = visibleWidth(inset);
+	if (insetWidth === 0) return undefined;
+	const tailStart = visibleWidth(head) + insetWidth;
+	const tail = `${gap}${"─".repeat(width - tailStart - visibleWidth(gap) - 1)}╮`;
+	return `${renderSakuraFrameSegment(head, 0, width)}${inset}${renderSakuraFrameSegment(tail, tailStart, width)}`;
 }
 
 function framedBodyLine(line: string, innerWidth: number): string {
@@ -65,8 +97,24 @@ function framedBodyLine(line: string, innerWidth: number): string {
  * 仅替换 Editor 的外框：输入、补全、粘贴、历史和 Pi 应用级快捷键仍由 CustomEditor 处理。
  */
 export class SakuraEditor extends CustomEditor {
+	/**
+	 * Pi ≥0.85 按 embedWorkingStatus + setWorkingStatusIndicator 识别可嵌入状态的输入框，
+	 * 把 Working / 重试 / 压缩状态交给上边框，不再单占 statusContainer（开启 clearOnShrink 时
+	 * 结束后宿主会在那里留 2 行 IdleStatus 空白）。旧宿主不识别，保持独立状态行。
+	 */
+	readonly embedWorkingStatus = true;
+	private borderStatus: BorderStatus | undefined;
+
 	constructor(tui: TUI, editorTheme: EditorTheme, keybindings: KeybindingsManager) {
 		super(tui, editorTheme, keybindings, { paddingX: 0 });
+	}
+
+	/**
+	 * 不转交给 CustomEditor：它会把状态画进原生横线，圆角框就认不出其中的滚动提示；
+	 * 由 render 自己把状态嵌进上边框。
+	 */
+	setWorkingStatusIndicator(indicator: BorderStatus | undefined): void {
+		this.borderStatus = indicator;
 	}
 
 	override setPaddingX(_padding: number): void {
@@ -83,7 +131,7 @@ export class SakuraEditor extends CustomEditor {
 
 		if (baseLines.length < 2 || bottomIndex <= 0) return baseLines;
 
-		const lines = [roundedBorder(width, "top", baseLines[0])];
+		const lines = [roundedBorder(width, "top", baseLines[0], this.borderStatus)];
 		for (let index = 1; index < bottomIndex; index++) {
 			lines.push(framedBodyLine(baseLines[index] ?? "", innerWidth));
 		}

@@ -36,6 +36,7 @@
 ### Sakura 输入框
 
 - Pi 原生编辑器外包一层 Sakura macaron 圆角框
+- Pi ≥0.85 时 Working / retry / compaction 状态嵌进上边框（`╭─ ⠋ Working · 12s ───╮`），不再单占一行；开启 clearOnShrink 时回答结束也不会在输入框上方留 2 行空白。旧宿主保持独立状态行
 - 保留补全、粘贴、历史、Esc 中断和全部 Pi 快捷键
 - 小于 7 列时安全回退原生 Editor，避免双宽字符与光标触发换行递归；发现其它扩展接管 Editor 时自动让位
 

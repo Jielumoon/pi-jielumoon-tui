@@ -113,21 +113,26 @@ export function renderSakuraFrameGradient(text: string): string {
 	}
 	const chars = [...text];
 	if (chars.length === 0) return text;
-	const span = Math.max(1, chars.length - 1);
-	const rendered = `${chars
-		.map((char, index) => {
-			if (char === " ") return char;
-			const pos = index / span;
-			// 0 → 1 → 0 so left/right corners share sakura pink.
-			const mirrored = pos <= 0.5 ? pos * 2 : (1 - pos) * 2;
-			return foreground(sampleSakuraGradient(mirrored), char);
-		})
-		.join("")}${RESET}`;
+	const rendered = renderSakuraFrameSegment(text, 0, chars.length);
 	if (gradientCache.size >= GRADIENT_CACHE_LIMIT) {
 		gradientCache.delete(gradientCache.keys().next().value ?? "");
 	}
 	gradientCache.set(cacheKey, rendered);
 	return rendered;
+}
+
+/** 长 total 列的边框里从第 start 列起的一段；中间嵌入其它内容时，两侧渐变仍按整条连续。 */
+export function renderSakuraFrameSegment(text: string, start: number, total: number): string {
+	const span = Math.max(1, total - 1);
+	return `${[...text]
+		.map((char, index) => {
+			if (char === " ") return char;
+			const pos = (start + index) / span;
+			// 0 → 1 → 0 so left/right corners share sakura pink.
+			const mirrored = pos <= 0.5 ? pos * 2 : (1 - pos) * 2;
+			return foreground(sampleSakuraGradient(mirrored), char);
+		})
+		.join("")}${RESET}`;
 }
 
 /** Render a frame with static corners; only the horizontal interior uses the gradient. */
