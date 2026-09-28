@@ -13,7 +13,7 @@
 - `src/readmap-renderers/`：接管 read / edit / write / bash / ls（readmap 重定义或 pi 原生）、grep / find（pi 核心或 pi-fff 的 ffgrep / fffind）与 apply_patch（第三方 @xl0/pi-lovely-codex）的展示与折叠，另用 `inline.ts` 描述表把 MCP、抓取、检索（含 pi-smart-search 的 smart_search_*）、上下文杂务与提问工具折成 read 式一行，不改 execute；readmap 注册路径（hashline/global/registerTool）覆盖扩展重定义的工具，pi 原生与第三方注册的一律经 `ToolExecutionComponent.getRenderShell` 桥接就地 patch（原型不可写时静默降级为宿主原生渲染）；入口 `index.ts`，内部按 presentation / header / diff / apply-patch / stream-animation / write-stream / edit-stream / results / inline / patch 分层
 - `src/prototype-patch-registry.ts`：原型补丁安装与清理
 - `src/ansi.ts`、`src/guards.ts`、`src/duration.ts`、`src/token-estimate.ts`：跨模块共享的样式剥离、类型判断、时长格式化与 token 估算
-- `tests/`：Node `assert` + `tsx --test` 回归；`plan/archive/` 仅存已完成计划
+- `tests/`：Node `assert` + `tsx --test` 回归；`plan/`、`docs/`、`handoff/` 只在本地保留（`.git/info/exclude`），`plan/archive/` 存已完成计划
 
 ## Build, Test, and Development Commands
 
