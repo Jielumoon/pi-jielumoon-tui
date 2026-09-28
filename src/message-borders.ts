@@ -111,7 +111,11 @@ function isRenderedLines(value: unknown): value is RenderedLines {
 	return Array.isArray(value) && value.every((line) => typeof line === "string");
 }
 
-/** 移除宿主工具卡背景，保留前景色、粗体及其它 SGR 样式。 */
+/**
+ * 移除宿主工具卡背景，保留前景色、粗体及其它 SGR 样式。
+ * 38/48 扩展色后面的 `5;N` / `2;R;G;B` 是参数而不是独立 SGR 码，必须整段跳过；
+ * 否则 N 或 R/G/B 落在 40–47、100–107 时会被误当背景码删掉，前景色随之失效。
+ */
 function stripBackgroundAnsi(line: string): string {
 	return line.replace(/\x1b\[([0-9;:]*)m/g, (_sequence, parameters: string) => {
 		const values = parameters.split(";");
@@ -120,12 +124,14 @@ function stripBackgroundAnsi(line: string): string {
 			const value = values[index] ?? "";
 			if (value.startsWith("48:") || value === "49") continue;
 			const code = Number(value || "0");
-			if ((code >= 40 && code <= 47) || (code >= 100 && code <= 107)) continue;
-			if (code === 48) {
+			if (code === 38 || code === 48) {
 				const mode = values[index + 1];
-				index += mode === "2" ? 4 : mode === "5" ? 2 : 0;
+				const span = mode === "2" ? 4 : mode === "5" ? 2 : 0;
+				if (code === 38) kept.push(...values.slice(index, index + span + 1));
+				index += span;
 				continue;
 			}
+			if ((code >= 40 && code <= 47) || (code >= 100 && code <= 107)) continue;
 			kept.push(value);
 		}
 		return kept.length > 0 ? `\x1b[${kept.join(";")}m` : "";

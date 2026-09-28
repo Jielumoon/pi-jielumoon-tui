@@ -823,6 +823,30 @@ const TOOL_BG_SUCCESS_ANSI = "\x1b[48;2;62;75;78m";
 const TOOL_BG_ERROR_ANSI = "\x1b[48;2;82;54;70m";
 const TOOL_BG_CANCELLED_ANSI = "\x1b[48;2;79;72;64m";
 
+test("外框层去底色时保留 38;5 / 38;2 前景色参数（即使落在 40–47、100–107）", () => {
+	type ToolPrototype = { render(this: unknown, width: number): string[] };
+	const prototype = ToolExecutionComponent.prototype as unknown as ToolPrototype;
+	const originalRender = prototype.render;
+	let cleanup = (): void => {};
+	try {
+		prototype.render = () => [
+			"",
+			"✓ Edit  target",
+			"\x1b[38;5;103mA\x1b[39m \x1b[38;2;107;101;132mB\x1b[39m \x1b[1;38;5;44;48;5;103mC\x1b[0m \x1b[48;2;40;41;42;38;5;46mD\x1b[0m",
+		];
+		cleanup = installMessageBorders(() => undefined);
+		const body = prototype.render.call({ isPartial: false, result: { isError: false, content: [] }, toolName: "edit" }, 80).join("\n");
+		assert.match(body, /\x1b\[38;5;103mA/, "256 色号 103 不能被当成亮背景删掉");
+		assert.match(body, /\x1b\[38;2;107;101;132mB/, "真彩分量 107/101 不能被删");
+		assert.match(body, /\x1b\[1;38;5;44mC/, "同一序列里前景保留、48;5;103 背景去掉");
+		assert.match(body, /\x1b\[38;5;46mD/, "48;2 背景整段跳过后前景仍在");
+		assert.doesNotMatch(body, /48;[25];/);
+	} finally {
+		cleanup();
+		prototype.render = originalRender;
+	}
+});
+
 test("tool status background is optional, Sakura-fixed, and semantic", () => {
 	type ToolPrototype = { render(this: unknown, width: number): string[] };
 	const prototype = ToolExecutionComponent.prototype as unknown as ToolPrototype;
