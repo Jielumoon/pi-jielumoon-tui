@@ -7,10 +7,10 @@
 - `src/vibrant-footer.ts` + `src/footer/`：Footer 生命周期、渲染、设置、会话 usage、Blackhole / Magic Context 状态行；`magic-context-model.ts` 只从当前会话日志与运行中子进程读取 MC 实际模型；`subscription-usage.ts` 自研 Codex / Anthropic / OpenRouter / xAI 用量
 - `src/nano-context.ts`：上下文用量彩条
 - `src/thinking.ts`、`src/thinking-message.ts`：Thought trail
-- `src/message-borders.ts`：用户消息、工具和 Bash 卡片样式；运行中卡片标题带实时秒表（≥1s 显示，随标题 spinner 帧更新，不扩大重绘范围）
+- `src/message-borders.ts`：用户消息、`/skill` 调用块、工具和 Bash 卡片样式；一行式工具与完成后只剩标题的卡片不画框、与 read 同列缩进；运行中卡片标题带实时秒表（≥1s 显示，随标题 spinner 帧更新，不扩大重绘范围）
 - `src/sakura-editor.ts`：Sakura 圆角输入框；保留 Pi 原生编辑，遇其它 Editor 时让位
 - `src/working.ts`：Working Shimmer、spinner 与耗时 transcript
-- `src/readmap-renderers/`：接管 read / edit / write / bash / ls（readmap 重定义或 pi 原生）、grep / find（pi 核心）与 apply_patch（第三方 @xl0/pi-lovely-codex）的展示与折叠，不改 execute；readmap 注册路径（hashline/global/registerTool）覆盖扩展重定义的工具，pi 原生与第三方注册的一律经 `ToolExecutionComponent.getRenderShell` 桥接就地 patch（原型不可写时静默降级为宿主原生渲染）；入口 `index.ts`，内部按 presentation / header / diff / apply-patch / stream-animation / write-stream / edit-stream / results / patch 分层
+- `src/readmap-renderers/`：接管 read / edit / write / bash / ls（readmap 重定义或 pi 原生）、grep / find（pi 核心或 pi-fff 的 ffgrep / fffind）与 apply_patch（第三方 @xl0/pi-lovely-codex）的展示与折叠，另用 `inline.ts` 描述表把 MCP、抓取、检索、上下文杂务与提问工具折成 read 式一行，不改 execute；readmap 注册路径（hashline/global/registerTool）覆盖扩展重定义的工具，pi 原生与第三方注册的一律经 `ToolExecutionComponent.getRenderShell` 桥接就地 patch（原型不可写时静默降级为宿主原生渲染）；入口 `index.ts`，内部按 presentation / header / diff / apply-patch / stream-animation / write-stream / edit-stream / results / inline / patch 分层
 - `src/prototype-patch-registry.ts`：原型补丁安装与清理
 - `src/ansi.ts`、`src/guards.ts`、`src/duration.ts`、`src/token-estimate.ts`：跨模块共享的样式剥离、类型判断、时长格式化与 token 估算
 - `tests/`：Node `assert` + `tsx --test` 回归；`plan/archive/` 仅存已完成计划

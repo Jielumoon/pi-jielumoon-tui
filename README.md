@@ -50,6 +50,13 @@
 
 输入框保留 Sakura 圆角框；工具执行逻辑保持 Pi/readmap 原样，本扩展只接管 renderer 与折叠展示。
 
+### 工具展示
+
+- 只给模型看的工具与 `read` 一样折成一行 `✓ 标签  主体 · 徽章 · Ctrl+O`，无外框，Ctrl+O 展开后直接铺正文：MCP（`mcp` / `mcpScript` / `mcp__*`）、`web_fetch`、`search`、`docs_search`、`ctx_*`、`obs_recall`、`ask_user_question`
+- `/skill:name` 调用块与模型 read `SKILL.md` 都显示为 `✓ Skill  name`
+- pi-fff 的 `ffgrep` / `fffind` 复用 Grep / Find 卡片（按文件分组、高亮匹配）
+- 其它卡片完成后若只剩标题（`Ls … empty`、无输出 Bash），同样收成一行
+
 ## 安装
 
 直接从 GitHub 安装：

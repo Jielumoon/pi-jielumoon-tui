@@ -1,5 +1,6 @@
 import {
 	BashExecutionComponent,
+	SkillInvocationMessageComponent,
 	ToolExecutionComponent,
 	UserMessageComponent,
 	type ExtensionAPI,
@@ -10,6 +11,10 @@ import {
 import { Markdown, type MarkdownTheme, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { stripAnsi, trimTerminalPadding } from "./ansi";
 import { formatElapsed } from "./duration";
+import { renderToolHeader, skillSubject } from "./readmap-renderers/header.ts";
+import { isInlineSpecTool, isInlineToolFailed } from "./readmap-renderers/inline.ts";
+import { READMAP_RENDERER_MARK } from "./readmap-renderers/patch.ts";
+import { resolvePresentation } from "./readmap-renderers/presentation.ts";
 import {
 	mix,
 	renderBoxedLine,
@@ -35,8 +40,10 @@ type ToolRuntime = {
 	result?: {
 		isError?: boolean;
 		content?: Array<{ type?: string }>;
+		details?: unknown;
 	};
 	toolName?: string;
+	toolDefinition?: unknown;
 	hideComponent?: boolean;
 	expanded?: boolean;
 	showImages?: boolean;
@@ -48,6 +55,22 @@ type PatchableUserMessage = {
 
 type UserMessageRenderCache = {
 	text: string;
+	width: number;
+	theme: Theme | undefined;
+	lines: RenderedLines;
+};
+
+type SkillBlockLike = { name?: unknown; location?: unknown; content?: unknown };
+
+type PatchableSkillMessage = {
+	expanded?: boolean;
+	skillBlock?: SkillBlockLike;
+	markdownTheme?: MarkdownTheme;
+};
+
+type SkillRenderCache = {
+	block: SkillBlockLike;
+	expanded: boolean;
 	width: number;
 	theme: Theme | undefined;
 	lines: RenderedLines;
@@ -85,6 +108,7 @@ type BashRenderCache = {
 };
 
 const userMessageRenderCache = new WeakMap<object, UserMessageRenderCache>();
+const skillRenderCache = new WeakMap<object, SkillRenderCache>();
 const toolRenderCache = new WeakMap<object, ToolRenderCache>();
 const toolRenderRevision = new WeakMap<object, number>();
 const bashRenderCache = new WeakMap<object, BashRenderCache>();
@@ -150,17 +174,44 @@ function containsResultImage(runtime: ToolRuntime): boolean {
 	return runtime.result?.content?.some((item) => item.type === "image") ?? false;
 }
 
+/**
+ * 不画外框、与 read 同列缩进的工具。描述表工具只在一行式 renderer 真正接管时才算：
+ * 工具已卸载（宿主退回 contentText 平铺参数与输出）或 patch 失败时，仍用外框兜住原始内容。
+ */
+function isInlineRuntime(runtime: ToolRuntime): boolean {
+	if (runtime.toolName === "read") return true;
+	const definition = runtime.toolDefinition;
+	return isInlineSpecTool(runtime.toolName)
+		&& isObject(definition)
+		&& (definition as Record<symbol, unknown>)[READMAP_RENDERER_MARK] === true;
+}
+
+/** 一行式行统一缩进两列；图片控制序列行原样保留。 */
+function indentInline(lines: readonly string[], width: number): RenderedLines {
+	return lines.map((line) => (isBlank(line) || containsTerminalImage([line]) ? line : truncateToWidth(`  ${line}`, width, "")));
+}
+
+/** 去掉首尾空行：default shell 的 Box 上下 padding 在剥掉底色后只剩空白。 */
+function trimBlankEdges(lines: readonly string[]): string[] {
+	let start = 0;
+	let end = lines.length;
+	while (start < end && isBlank(lines[start]!)) start++;
+	while (end > start && isBlank(lines[end - 1]!)) end--;
+	return lines.slice(start, end);
+}
+
 function toolPredecessorWidth(width: number, runtime: ToolRuntime): number {
+	const inline = isInlineRuntime(runtime);
 	if (
 		resolveRenderMode() !== "color" ||
 		!Number.isFinite(width) ||
 		width <= 2 ||
 		runtime.hideComponent ||
-		(runtime.toolName !== "read" && containsResultImage(runtime))
+		(!inline && containsResultImage(runtime))
 	) {
 		return width;
 	}
-	const chromeWidth = runtime.toolName === "read" ? READ_INDENT_WIDTH : TOOL_FRAME_CHROME_WIDTH;
+	const chromeWidth = inline ? READ_INDENT_WIDTH : TOOL_FRAME_CHROME_WIDTH;
 	return Math.max(1, Math.floor(width) - chromeWidth);
 }
 
@@ -267,9 +318,63 @@ function renderSakuraUserMessage(
 	return markedLines;
 }
 
+/**
+ * `/skill:name` 调用块：宿主是带底色和内边距的 `[skill] name (ctrl+o to expand)` Box，
+ * 改成与 read 一致的一行式 `✓ Skill  name · N lines · Ctrl+O`，展开后无框铺开 Markdown 正文。
+ */
+function renderSkillInvocation(
+	receiver: PatchableSkillMessage,
+	width: number,
+	theme: Theme | undefined,
+): RenderedLines | undefined {
+	const block = receiver.skillBlock;
+	const targetWidth = frameWidth(width);
+	if (
+		resolveRenderMode() !== "color" ||
+		typeof block?.name !== "string" ||
+		typeof block.content !== "string" ||
+		targetWidth < MIN_RAIL_WIDTH
+	) {
+		return undefined;
+	}
+	const expanded = receiver.expanded === true;
+	const cached = skillRenderCache.get(receiver as object);
+	if (
+		cached?.block === block &&
+		cached.expanded === expanded &&
+		cached.width === targetWidth &&
+		cached.theme === theme
+	) {
+		return cached.lines;
+	}
+
+	const presentation = resolvePresentation(theme);
+	const content = block.content.trim();
+	const lineCount = content.length === 0 ? 0 : content.split("\n").length;
+	const header = renderToolHeader("skill", undefined, presentation, {}, {
+		phase: "success",
+		meta: [lineCount === 0 ? "empty" : `${lineCount} ${lineCount === 1 ? "line" : "lines"}`],
+		expandable: lineCount > 0 && !expanded,
+		subject: skillSubject(block.name, typeof block.location === "string" ? block.location : "", presentation, undefined),
+	});
+	const body = expanded && lineCount > 0
+		? new Markdown(
+			block.content,
+			0,
+			0,
+			receiver.markdownTheme ?? makeUserMarkdownTheme(theme),
+			{ color: (text) => themeFg(theme, "toolOutput", text) },
+		).render(Math.max(1, targetWidth - READ_INDENT_WIDTH))
+		: [];
+	const lines = indentInline([replaceStateMarker(header, "success"), ...body], targetWidth);
+	skillRenderCache.set(receiver as object, { block, expanded, width: targetWidth, theme, lines });
+	return lines;
+}
+
+/** 失败以结构化结果为准：isError 之外，MCP 适配器还会只用 details.error 表达失败。 */
 function toolState(runtime: ToolRuntime): "running" | "success" | "error" {
 	if (runtime.isPartial !== false) return "running";
-	return runtime.result?.isError ? "error" : "success";
+	return runtime.result?.isError || isInlineToolFailed(runtime.toolName, runtime.result?.details) ? "error" : "success";
 }
 
 function stateMarker(state: "running" | "success" | "error" | "cancelled"): string {
@@ -408,13 +513,13 @@ function decorateToolMessage(
 	runtime: ToolRuntime,
 	showToolBackground: boolean,
 ): RenderedLines {
-	const isRead = runtime.toolName === "read";
+	const inlineTool = isInlineRuntime(runtime);
 	if (
 		resolveRenderMode() !== "color" ||
 		width <= 2 ||
 		lines.length === 0 ||
 		runtime.hideComponent ||
-		(!isRead && (containsTerminalImage(lines) || containsResultImage(runtime)))
+		(!inlineTool && (containsTerminalImage(lines) || containsResultImage(runtime)))
 	) {
 		return lines;
 	}
@@ -431,15 +536,21 @@ function decorateToolMessage(
 			const suffix = runningElapsedSuffix(runtime);
 			// 宿主默认 shell 会把标题行补齐到整宽；直接尾接秒表会让 padding 变成
 			// "内部空格"逃过 titleBorder 的尾部修剪，撑爆标题预算（右侧横线消失、命令被 … 截断）。
-			if (suffix.length > 0) body[firstContent] = trimTerminalPadding(body[firstContent]!) + suffix;
+			// 一行式工具没有 titleBorder 兜底，先按缩进后的宽度给秒表让位。
+			if (suffix.length > 0) {
+				const title = trimTerminalPadding(body[firstContent]!);
+				body[firstContent] = (inlineTool
+					? truncateToWidth(title, Math.max(1, width - READ_INDENT_WIDTH - visibleWidth(suffix)), "…")
+					: title) + suffix;
+			}
 		}
 	}
 
-	if (isRead) {
-		return [...prefix, ...body].map((line) => {
-			if (isBlank(line) || containsTerminalImage([line])) return line;
-			return truncateToWidth(`  ${line}`, width, "");
-		});
+	// 一行式工具与完成后只剩标题的卡片（Ls empty、无输出 Bash）都不画外框，与 read 同列缩进。
+	const headerOnly = state !== "running" && body.every((line, index) => index === firstContent || isBlank(line));
+	if (inlineTool || headerOnly) {
+		// 图片占位行后的空白是图片高度，不能剪；无图时去掉 Box padding 留下的首尾空行。
+		return [...prefix, ...indentInline(containsTerminalImage(body) ? body : trimBlankEdges(body), width)];
 	}
 	return frameBody(prefix, body, width, state, showToolBackground);
 }
@@ -514,6 +625,28 @@ export function installMessageBorders(
 		"user-message-invalidate",
 		({ predecessor, receiver, args }) => {
 			if (isObject(receiver)) userMessageRenderCache.delete(receiver);
+			return Reflect.apply(predecessor, receiver, args);
+		},
+	);
+
+	const cleanupSkillMessage = installPrototypePatch(
+		SkillInvocationMessageComponent.prototype,
+		"render",
+		"skill-invocation-render",
+		({ predecessor, receiver, args }) => {
+			const width = args[0];
+			if (typeof width !== "number") return Reflect.apply(predecessor, receiver, args);
+			const rendered = renderSkillInvocation(receiver as PatchableSkillMessage, width, getTheme());
+			return rendered ?? Reflect.apply(predecessor, receiver, args);
+		},
+	);
+
+	const cleanupSkillInvalidate = installPrototypePatch(
+		SkillInvocationMessageComponent.prototype,
+		"invalidate",
+		"skill-invocation-invalidate",
+		({ predecessor, receiver, args }) => {
+			if (isObject(receiver)) skillRenderCache.delete(receiver);
 			return Reflect.apply(predecessor, receiver, args);
 		},
 	);
@@ -674,6 +807,8 @@ export function installMessageBorders(
 		cleanupToolUpdateDisplay();
 		cleanupToolInvalidate();
 		cleanupToolMessage();
+		cleanupSkillInvalidate();
+		cleanupSkillMessage();
 		cleanupUserInvalidate();
 		cleanupUserMessage();
 	};

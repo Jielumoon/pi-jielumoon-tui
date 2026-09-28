@@ -7,7 +7,7 @@ import { reuseOrCreateText, reuseOrCreateWidthAware } from "./components.ts";
 import { isDiffData, renderDiffLines, reuseOrCreateDiff } from "./diff.ts";
 import { EditCallComponent, reuseOrCreateEditCall } from "./edit-stream.ts";
 import { trailingTextByWidth } from "./stream-animation.ts";
-import { formatLineRange, normalizeLineNumber, renderToolHeader } from "./header.ts";
+import { formatLineRange, normalizeLineNumber, renderToolHeader, skillNameFromPath, type ToolSubject } from "./header.ts";
 import {
 	asThemeLike,
 	clampLine,
@@ -93,7 +93,7 @@ function wrapHashlines(text: string, width: number, presentation: RenderPresenta
 	return out;
 }
 
-function textOf(result: ToolResultLike, presentation?: RenderPresentation): string {
+export function textOf(result: ToolResultLike, presentation?: RenderPresentation): string {
 	const parts = result.content
 		?.filter((item) => item?.type === "text" && typeof item.text === "string")
 		.map((item) => item.text);
@@ -104,7 +104,7 @@ function textOf(result: ToolResultLike, presentation?: RenderPresentation): stri
 	});
 }
 
-function isExpanded(
+export function isExpanded(
 	options: { expanded?: boolean } | undefined,
 	context: RenderContextLike | undefined,
 ): boolean {
@@ -238,7 +238,7 @@ function warningBadges(value: unknown): string[] {
 	return [`${value.length} warning${value.length === 1 ? "" : "s"}`];
 }
 
-function renderToolError(
+export function renderToolError(
 	name: string,
 	body: string,
 	options: RenderOptionsLike,
@@ -246,6 +246,7 @@ function renderToolError(
 	context: RenderContextLike,
 	meta: readonly string[] = [],
 	collapsedTail = 0,
+	subject?: ToolSubject,
 ): Component {
 	const outputLines = body.split("\n");
 	const first = outputLines[0] || `${name} failed`;
@@ -262,6 +263,7 @@ function renderToolError(
 			phase: "error",
 			meta: [...meta, truncateToWidth(first, width, "…")],
 			expandable: hasHidden,
+			subject,
 		});
 		return [header, ...preview.rows, ...(hasHidden && preview.rows.length > 0 ? [preview.clipped
 			? styleText(presentation, "dim", "… more output · Ctrl+O")
@@ -285,6 +287,11 @@ export function renderReadResult(
 	const ptc = asRecord(details?.ptcValue);
 	const expanded = isExpanded(options, context);
 	const meta: string[] = [];
+	// 以 Skill 展示的整份 SKILL.md 不需要 `1 ~ N`；续读片段仍保留行范围。
+	const isSkill = skillNameFromPath(asRecord(context.args)?.path) !== undefined;
+	const pushRange = (start: number, end: number): void => {
+		if (!(isSkill && start === 1)) meta.push(formatLineRange({ start, end }));
+	};
 	const pushCount = (shown: number, total: number, truncated: boolean): void => {
 		const word = shown === 1 ? "line" : "lines";
 		meta.push(total > shown ? `${shown}/${total} ${word}` : `${shown} ${word}`);
@@ -301,9 +308,7 @@ export function renderReadResult(
 		const visible = truncation && typeof truncation.outputLines === "number"
 			? truncation.outputLines
 			: Math.max(0, end - start + 1);
-		if (startLine !== undefined && endLine !== undefined) {
-			meta.push(formatLineRange({ start: startLine, end: endLine }));
-		}
+		if (startLine !== undefined && endLine !== undefined) pushRange(startLine, endLine);
 		pushCount(visible, truncation ? (typeof truncation.totalLines === "number" ? truncation.totalLines : total) : visible, Boolean(truncation));
 		const symbol = asRecord(ptc.symbol);
 		if (symbol && typeof symbol.name === "string") meta.push(`symbol: ${displayText(symbol.name, p)}`);
@@ -325,7 +330,7 @@ export function renderReadResult(
 				: typeof native?.totalLines === "number"
 					? native.totalLines
 					: end;
-		if (shown > 0) meta.push(formatLineRange({ start, end }));
+		if (shown > 0) pushRange(start, end);
 		pushCount(shown, total, native?.truncated === true);
 	}
 
@@ -677,6 +682,11 @@ function stripTrailingNotice(body: string): string {
 	return match ? body.slice(0, match.index) : body;
 }
 
+/** pi-fff 分页只在尾注里给 `cursor="…"`，details 不带截断标记。 */
+function hasPagingNotice(body: string): boolean {
+	return /\n\n\[[^\n]*cursor="[^\n]*\]$/.test(body);
+}
+
 type GrepRow = { kind: "match" | "context"; file: string; lineNo: string; text: string }
 	| { kind: "plain"; text: string };
 
@@ -694,6 +704,35 @@ function parseGrepRow(line: string): GrepRow {
 		return { kind: "context", file: context[1]!, lineNo: context[2]!, text: context[3]! };
 	}
 	return { kind: "plain", text: line };
+}
+
+/** fff（pi-fff）分组格式：文件头独占一行（可带状态注记），其后是 ` 12: text` / ` 12- text`。 */
+const FFF_GREP_ROW_RE = /^\s+(\d+)([:-]) ?(.*)$/;
+/** pi-fff fffFileAnnotation 只产这三种注记；其它 `  [...]` 可能是合法文件名的一部分。 */
+const FFF_ANNOTATION_RE = / {2}\[(?:[^\]]+ in git|(?:VERY )?often touched file)\]$/;
+
+/** pi-fff 的 grep/find details 固定带 totalMatched 与 totalFiles，原生工具没有。 */
+function isFffResult(details: Record<string, unknown> | undefined): boolean {
+	return typeof details?.totalMatched === "number" && typeof details?.totalFiles === "number";
+}
+
+/** 同时接受 pi 原生逐行带路径与 fff 分组两种输出：后面紧跟 fff 行号行的普通行即文件头。 */
+function parseGrepRows(lines: readonly string[]): GrepRow[] {
+	const rows: GrepRow[] = [];
+	let file: string | undefined;
+	for (const [index, line] of lines.entries()) {
+		const grouped = file === undefined ? null : FFF_GREP_ROW_RE.exec(line);
+		if (grouped) {
+			rows.push({ kind: grouped[2] === ":" ? "match" : "context", file: file!, lineNo: grouped[1]!, text: grouped[3]! });
+			continue;
+		}
+		const row = parseGrepRow(line);
+		file = row.kind === "plain" && FFF_GREP_ROW_RE.test(lines[index + 1] ?? "")
+			? line.replace(FFF_ANNOTATION_RE, "")
+			: undefined;
+		if (file === undefined) rows.push(row);
+	}
+	return rows;
 }
 
 function escapeRegExpLiteral(value: string): string {
@@ -757,7 +796,8 @@ export function renderGrepResult(
 	const details = asRecord(result.details);
 	const truncated = Boolean(details?.matchLimitReached)
 		|| Boolean(asRecord(details?.truncation)?.truncated)
-		|| Boolean(details?.linesTruncated);
+		|| Boolean(details?.linesTruncated)
+		|| hasPagingNotice(rawBody);
 	const body = stripTrailingNotice(rawBody).replace(/\n+$/, "");
 	const lines = body.length === 0 ? [] : body.split("\n").filter((line) => line.length > 0);
 	if (lines.length === 0 || body.trim() === "No matches found") {
@@ -767,7 +807,7 @@ export function renderGrepResult(
 		}));
 	}
 
-	const rows = lines.map(parseGrepRow);
+	const rows = parseGrepRows(lines);
 	const matchTotal = rows.filter((row) => row.kind === "match").length;
 	const fileTotal = new Set(
 		rows.flatMap((row) => (row.kind === "plain" ? [] : [row.file])),
@@ -854,9 +894,13 @@ export function renderFindResult(
 
 	const details = asRecord(result.details);
 	const truncated = Boolean(details?.resultLimitReached)
-		|| Boolean(asRecord(details?.truncation)?.truncated);
+		|| Boolean(asRecord(details?.truncation)?.truncated)
+		|| details?.hasMore === true
+		|| hasPagingNotice(rawBody);
 	const body = stripTrailingNotice(rawBody).replace(/\n+$/, "");
-	const paths = body.length === 0 ? [] : body.split("\n").filter((line) => line.length > 0);
+	const fff = isFffResult(details);
+	const paths = body.length === 0 ? [] : body.split("\n").filter((line) => line.length > 0)
+		.map((line) => (fff ? line.replace(FFF_ANNOTATION_RE, "") : line));
 	if (paths.length === 0 || body.trim() === "No files found matching pattern") {
 		return reuseOrCreateText(context.lastComponent, renderToolHeader("find", context.args, p, context, {
 			phase: "success",

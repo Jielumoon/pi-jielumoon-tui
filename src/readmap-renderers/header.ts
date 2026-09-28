@@ -28,6 +28,30 @@ function linkPath(styled: string, rawPath: string, cwd: string | undefined): str
 	}
 }
 
+/** 父目录即 skill 名；`./SKILL.md`、`../SKILL.md` 这类相对段不算。 */
+const SKILL_FILE = /(?:^|[\\/])(?!\.\.?[\\/])([^\\/]+)[\\/]SKILL\.md$/i;
+
+/** `…/skills/<name>/SKILL.md` → `<name>`；read 加载 skill 时按 Skill 展示。 */
+export function skillNameFromPath(path: unknown): string | undefined {
+	return typeof path === "string" ? SKILL_FILE.exec(path)?.[1] : undefined;
+}
+
+/** Skill 主体：名字着 syntaxType，并链接到 SKILL.md。 */
+export function skillSubject(
+	name: string,
+	location: string,
+	presentation: RenderPresentation,
+	cwd: string | undefined,
+): ToolSubject {
+	const styled = styleText(presentation, "syntaxType", displayText(name, presentation));
+	return {
+		label: "Skill",
+		labelColor: "mdHeading",
+		target: presentation.mode === "color" ? linkPath(styled, location, cwd) : styled,
+		meta: [],
+	};
+}
+
 function shortenPath(path: string, max = 48): string {
 	if (visibleWidth(path) <= max) return path;
 	const parts = path.replaceAll("\\", "/").split("/");
@@ -42,15 +66,17 @@ function shortenPath(path: string, max = 48): string {
 	return visibleWidth(shortened) <= max ? shortened : truncateToWidth(path, max);
 }
 
-function toolLabel(theme: ThemeLike | undefined, name: string): string {
+function toolLabel(theme: ThemeLike | undefined, name: string, color = "toolTitle"): string {
 	const label = name.length > 0 ? `${name[0]!.toUpperCase()}${name.slice(1)}` : "Tool";
-	return themeFg(theme, "toolTitle", themeBold(theme, label));
+	return themeFg(theme, color, themeBold(theme, label));
 }
 
 export type LineRange = { start: number; end: number };
 
 const LINE_RANGE_SEPARATOR = " ~ ";
 const LINE_RANGE_PATTERN = /^\d+ ~ \d+$/;
+/** mcpScript 的失败计数徽章。 */
+const FAILED_META_PATTERN = /^\d+ failed$/;
 
 export function phaseMarker(presentation: RenderPresentation, phase: ToolPhase): string {
 	if (presentation.mode !== "color") return "";
@@ -87,7 +113,11 @@ export function isLineRangeFormat(value: string): boolean {
 	return LINE_RANGE_PATTERN.test(value);
 }
 
-type ToolSubject = { target: string; meta: string[] };
+/**
+ * 标题主体：label 缺省为首字母大写的工具名，target 已着色。
+ * labelColor 为主题色名，按工具类别区分标签颜色（缺省 toolTitle，即本地文件/代码类）。
+ */
+export type ToolSubject = { label?: string; labelColor?: string; target: string; meta: string[] };
 
 function toolSubject(
 	name: string,
@@ -97,7 +127,8 @@ function toolSubject(
 	phase: ToolPhase,
 ): ToolSubject {
 	const record = asRecord(args) ?? {};
-	const path = typeof record.path === "string"
+	// pi-fff 用空字符串表示工作目录，与缺省 path 同样显示为 `.`。
+	const path = typeof record.path === "string" && record.path.length > 0
 		? displayText(record.path, presentation)
 		: name === "ls" || name === "grep" || name === "find" ? "." : "";
 	const linkedPath = (): string => {
@@ -108,6 +139,8 @@ function toolSubject(
 	};
 
 	if (name === "read") {
+		const skill = skillNameFromPath(record.path);
+		if (skill && path) return skillSubject(skill, path, presentation, context.cwd);
 		const meta: string[] = [];
 		if (typeof record.symbol === "string") meta.push(`symbol: ${displayText(record.symbol, presentation)}`);
 		const suffix = phase === "running" ? formatLineRange(parseLineRange(record), true) : "";
@@ -171,6 +204,7 @@ function toolSubject(
 
 function styleToolMeta(presentation: RenderPresentation, value: string): string {
 	if (isLineRangeFormat(value)) return styleText(presentation, "syntaxNumber", value);
+	if (FAILED_META_PATTERN.test(value)) return styleText(presentation, "error", value);
 	const stats = /^(\+\d+)\s+(−\d+)$/u.exec(value);
 	if (!stats) return styleText(presentation, "dim", value);
 	return `${styleText(presentation, "toolDiffAdded", stats[1]!)} ${styleText(presentation, "toolDiffRemoved", stats[2]!)}`;
@@ -181,10 +215,14 @@ export function renderToolHeader(
 	args: unknown,
 	presentation: RenderPresentation,
 	context: RenderContextLike,
-	options: { phase: ToolPhase; meta?: readonly string[]; expandable?: boolean },
+	options: { phase: ToolPhase; meta?: readonly string[]; expandable?: boolean; subject?: ToolSubject },
 ): string {
-	const subject = toolSubject(name, args, presentation, context, options.phase);
-	const meta = [...new Set([...subject.meta, ...(options.meta ?? [])].filter((item) => item.length > 0))];
+	const subject = options.subject
+		?? toolSubject(name, args, presentation, context, options.phase);
+	// 徽章可能来自 details（MCP summary、提问答案等外部文本），着色前统一净化控制序列。
+	const meta = [...new Set([...subject.meta, ...(options.meta ?? [])]
+		.map((item) => displayText(item, presentation))
+		.filter((item) => item.length > 0))];
 	if (options.expandable) meta.push(EXPAND_KEY);
 
 	if (presentation.mode === "screen-reader") {
@@ -198,7 +236,8 @@ export function renderToolHeader(
 		return `${name} ${state}: ${subject.target}${meta.length > 0 ? `; ${meta.join("; ")}` : ""}`;
 	}
 
-	const label = `${toolLabel(presentation.theme, name)}${subject.target ? `  ${subject.target}` : ""}`;
+	const title = subject.label ?? name;
+	const label = `${toolLabel(presentation.theme, title, subject.labelColor)}${subject.target ? `  ${subject.target}` : ""}`;
 	const marker = phaseMarker(presentation, options.phase);
 	const head = marker ? `${marker} ${label}` : label;
 	if (meta.length === 0) return head;

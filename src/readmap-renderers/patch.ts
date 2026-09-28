@@ -9,6 +9,7 @@ import { Text, type Component } from "@earendil-works/pi-tui";
 import { isObjectLike as isObject } from "../guards.ts";
 import { installPrototypePatch } from "../prototype-patch-registry.ts";
 import { asThemeLike } from "./presentation.ts";
+import { isInlineSpecTool, renderInlineToolCall, renderInlineToolResult } from "./inline.ts";
 import {
 	renderApplyPatchResult,
 	renderBashResult,
@@ -32,13 +33,21 @@ import { stopAllStreamAnimations } from "./stream-animation.ts";
 export const READMAP_RENDERER_MARK = Symbol.for("pi-jielumoon.readmap-renderer");
 
 /**
- * 接管的工具集合：read/edit/write/bash/ls（readmap 或 pi 原生）、grep/find（pi 核心）、
- * apply_patch（第三方 @xl0/pi-lovely-codex）。readmap 注册路径只覆盖扩展重定义的工具，
- * pi 原生与第三方注册的工具靠组件桥接兜底，全部名字共用这一个集合。
+ * 接管的工具集合：read/edit/write/bash/ls（readmap 或 pi 原生）、grep/find（pi 核心或
+ * pi-fff 的 ffgrep/fffind）、apply_patch（第三方 @xl0/pi-lovely-codex）。readmap 注册路径
+ * 只覆盖扩展重定义的工具，pi 原生与第三方注册的工具靠组件桥接兜底，全部名字共用这一个集合；
+ * 一行式描述表（MCP、抓取、检索、上下文杂务）另由 isInlineSpecTool 按名判定。
  */
 export const TARGET_TOOL_NAMES = new Set([
-	"read", "edit", "write", "bash", "ls", "grep", "find", "apply_patch",
+	"read", "edit", "write", "bash", "ls", "grep", "find", "apply_patch", "ffgrep", "fffind",
 ]);
+
+/** pi-fff 的同类工具复用核心 renderer（参数与输出已由 results 兼容）。 */
+const RENDER_ALIASES = new Map([["ffgrep", "grep"], ["fffind", "find"]]);
+
+function isTargetTool(name: string): boolean {
+	return TARGET_TOOL_NAMES.has(name) || isInlineSpecTool(name);
+}
 
 const readmapRendererSettings = new WeakMap<object, ReadmapRendererSettings>();
 
@@ -99,7 +108,7 @@ export function patchReadmapTool(
 	if (!isObject(tool)) return false;
 	const target = tool as PatchableTool;
 	const name = toolNameOf(target);
-	if (!name || !TARGET_TOOL_NAMES.has(name)) return false;
+	if (!name || !isTargetTool(name)) return false;
 	readmapRendererSettings.set(target, settings);
 	if (READMAP_RENDERER_MARK in target && target[READMAP_RENDERER_MARK] === true) {
 		return false;
@@ -109,12 +118,15 @@ export function patchReadmapTool(
 		renderCall: target.renderCall,
 		renderResult: target.renderResult,
 	};
+	const renderName = RENDER_ALIASES.get(name) ?? name;
+	const inline = isInlineSpecTool(name);
 
 	const renderCall = (args: unknown, theme: unknown, context: RenderContextLike = {}) => {
 		const t = asThemeLike(theme);
 		try {
+			if (inline) return renderInlineToolCall(name, args, t, context);
 			return renderToolCall(
-				name,
+				renderName,
 				args,
 				t,
 				context,
@@ -136,7 +148,8 @@ export function patchReadmapTool(
 	) => {
 		const t = asThemeLike(theme);
 		try {
-			switch (name) {
+			if (inline) return renderInlineToolResult(name, result, options, t, context);
+			switch (renderName) {
 				case "read":
 					return renderReadResult(result, options, t, context);
 				case "edit":
@@ -187,7 +200,7 @@ export function patchToolPayload(
 	for (const [key, value] of Object.entries(payload as Record<string, unknown>)) {
 		const tool = value as PatchableTool;
 		const name = typeof tool?.name === "string" ? tool.name : key;
-		if (!TARGET_TOOL_NAMES.has(name)) continue;
+		if (!isTargetTool(name)) continue;
 		if (isObject(tool) && typeof tool.name !== "string") {
 			// payload key is authoritative when tool.name missing
 			(tool as PatchableTool).name = name;
@@ -229,7 +242,7 @@ function installComponentRendererBridge(settings: ReadmapRendererSettings): void
 		({ predecessor, receiver, args }) => {
 			const component = receiver as ToolComponentLike;
 			const name = typeof component.toolName === "string" ? component.toolName : undefined;
-			if (name !== undefined && TARGET_TOOL_NAMES.has(name)) {
+			if (name !== undefined && isTargetTool(name)) {
 				try {
 					patchReadmapTool(component.toolDefinition ?? component.builtInToolDefinition, settings);
 				} catch {

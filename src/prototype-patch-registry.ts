@@ -3,6 +3,8 @@ export const ZENTUI_PROTOTYPE_PATCH_REGISTRY = Symbol.for("pi-zentui.prototype-p
 type PrototypePatchAdapter =
 	| "user-message-render"
 	| "user-message-invalidate"
+	| "skill-invocation-render"
+	| "skill-invocation-invalidate"
 	| "selector-border-render"
 	| "tool-execution-render"
 	| "tool-execution-invalidate"
