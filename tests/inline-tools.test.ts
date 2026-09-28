@@ -193,6 +193,75 @@ test("抓取、检索、提问和召回都收成一行摘要", () => {
 	});
 });
 
+test("pi-smart-search 的 smart_search_* 收成一行，数量取自摘要行，截断时标出", () => {
+	const names = [
+		"search", "fetch", "research", "exa_search", "exa_similar", "map", "context7_library",
+		"context7_docs", "plan", "route", "doctor", "providers", "tools",
+	].map((name) => `smart_search_${name}`);
+	for (const name of names) assert.equal(isInlineTool(name), true, name);
+
+	const header = (name: string, args: Record<string, unknown>, text: string, details?: unknown): string => {
+		const call = component(`smart_search_${name}`, args);
+		call.updateResult(textResult(text, details));
+		const lines = contentLines(call.render(120));
+		assert.equal(lines.length, 1, `${name} 折叠态必须只有一行`);
+		return lines[0]!.trimStart();
+	};
+	withBorders(() => {
+		// 回答正文里自带的 Sources: 不算，只数最后一段来源列表。
+		const answer = "结论\n\nSources:\n[9] https://fake\n\n正文继续";
+		assert.equal(
+			header("search", { query: "node sqlite" }, `${answer}\n\nSources:\n[1] https://a\n[2] https://b\n\nSmart Search: xai (m), 28.8s`),
+			'✓ Search  "node sqlite" · 2 sources · Ctrl+O',
+		);
+		assert.equal(
+			header("search", { query: "q" }, "很长的回答\n被截断", { fullOutputPath: "/tmp/p/x.md" }),
+			'✓ Search  "q" · 2 lines · truncated · Ctrl+O',
+			"来源列表被截掉时退回行数",
+		);
+		assert.equal(
+			header("fetch", { url: "https://raw.githubusercontent.com/a/b/extensions.md" }, "Fetched https://raw.githubusercontent.com/a/b/extensions.md via tavily (2.0KB)\n\n# Ext"),
+			"✓ Fetch  raw.githubusercontent.com/a/b/extensions.md · 2.0KB · Ctrl+O",
+		);
+		assert.equal(
+			header("research", { query: "进度回调" }, "Research: 进度回调\nbudget=quick, 21.1s, gap_check=closed\n5 evidence item(s); full page text is saved in /tmp/r\n\n[1] a"),
+			'✓ Research  "进度回调" · 5 evidence · Ctrl+O',
+		);
+		assert.equal(
+			header("exa_search", { query: "pi" }, "Exa returned 3 result(s) for: pi\n\n[1] a"),
+			'✓ Exa  "pi" · 3 results · Ctrl+O',
+		);
+		assert.equal(
+			header("exa_similar", { url: "https://github.com/earendil-works/pi" }, "Exa returned 1 result(s) similar to: https://github.com/earendil-works/pi\n\n[1] a"),
+			"✓ Exa  similar github.com/earendil-works/pi · 1 result · Ctrl+O",
+		);
+		assert.equal(
+			header("map", { url: "https://pi.dev/docs/latest" }, "Site map for https://pi.dev/docs/latest (10 URL(s)):\nhttps://pi.dev/docs/latest"),
+			"✓ Map  pi.dev/docs/latest · 10 URLs · Ctrl+O",
+		);
+		assert.equal(
+			header("context7_library", { name: "react" }, "Context7 returned 1 library for: react\n\n[1] /facebook/react — React"),
+			"✓ Context7  react · 1 library · Ctrl+O",
+		);
+		assert.equal(
+			header("context7_docs", { library_id: "/facebook/react", query: "hooks" }, "Context7 docs for /facebook/react (query: hooks)\n\nbody"),
+			'✓ Context7  /facebook/react "hooks" · 3 lines · Ctrl+O',
+		);
+		assert.equal(
+			header("doctor", {}, '{\n  "config_status": "config_error: Run `smart-search setup`"\n}'),
+			"✓ Doctor · config_error · Ctrl+O",
+		);
+		assert.equal(
+			header("providers", {}, "Provider health (cooldown 900s after 2 failures):\n- exa: closed, failures=0\n- tavily: open, failures=2, cooldown 120s"),
+			"✓ Providers · 2 providers · 1 in cooldown · Ctrl+O",
+		);
+		assert.equal(
+			header("tools", { groups: ["exa", "context7"] }, "Activated: a, b, c, d\n- exa: a, b\n- context7: c, d", { groups: ["exa", "context7"], added: ["a", "b", "c", "d"], unavailable: [] }),
+			"✓ Search Tools  enable exa, context7 · 4 tools · Ctrl+O",
+		);
+	});
+});
+
 test("一行式工具运行中标题过长时截断主体，保留实时秒表", () => {
 	const originalNow = Date.now;
 	withBorders(() => {
@@ -235,6 +304,7 @@ test("标签按工具类别使用不同主题色，本地文件类保持 toolTit
 	assert.match(header("mcp__js_reverse", { tool: "x" }), /«syntaxNumber:MCP»/);
 	assert.match(header("web_fetch", { url: "https://a.b" }), /«syntaxString:Fetch»/);
 	assert.match(header("search", { query: "q" }), /«syntaxString:Search»/);
+	assert.match(header("smart_search_research", { query: "q" }), /«syntaxString:Research»/);
 	assert.match(header("ask_user_question", {}), /«warning:Ask»/);
 	assert.match(header("ctx_reduce", { drop: "1" }), /«muted:Ctx Reduce»/);
 	assert.match(header("obs_recall", { id: "o" }), /«muted:Recall»/);

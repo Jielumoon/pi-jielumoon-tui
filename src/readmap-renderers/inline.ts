@@ -80,8 +80,8 @@ function records(value: unknown): Record<string, unknown>[] {
 	});
 }
 
-function plural(count: number, unit: string): string {
-	return `${count} ${count === 1 ? unit : `${unit}s`}`;
+function plural(count: number, unit: string, many = `${unit}s`): string {
+	return `${count} ${count === 1 ? unit : many}`;
 }
 
 function formatSize(bytes: number): string {
@@ -106,6 +106,10 @@ function defaultMeta(text: string): string[] {
 function query(args: Args): InlineSubject {
 	const value = str(args.query);
 	return value ? { target: { text: clip(value, SUBJECT_WIDTH), kind: "query" } } : {};
+}
+
+function url(args: Args): InlineSubject {
+	return str(args.url) ? { target: { text: shortenUrl(str(args.url)), kind: "id" } } : {};
 }
 
 function verbOnly(verb: string): InlineSubject {
@@ -209,13 +213,140 @@ function answerText(answer: Record<string, unknown> | undefined): string {
 	return str(answer?.answer) || selected.join(", ");
 }
 
+// ─── pi-smart-search ────────────────────────────────────────────
+
+/**
+ * smart_search_* 的 details 只有 elapsedMs / fullOutputPath，数量只能从 pi-smart-search
+ * format.ts 固定的摘要行取；取不到（格式变了、被截断）时退回缺省徽章。
+ * 超过 12KB 截断落盘时补 `truncated`。
+ */
+function smartMeta(count: (text: string) => string[]): NonNullable<InlineSpec["meta"]> {
+	return (text, details) => {
+		const badges = count(text);
+		return [...(badges.length > 0 ? badges : defaultMeta(text)), ...(str(details?.fullOutputPath) ? ["truncated"] : [])];
+	};
+}
+
+function counted(pattern: RegExp, unit: string, many?: string): (text: string) => string[] {
+	return (text) => {
+		const match = pattern.exec(text);
+		return match ? [plural(Number(match[1]), unit, many)] : [];
+	};
+}
+
+/** 回答正文里也可能出现 `Sources:`，只数最后一段来源列表。 */
+function smartSources(text: string): string[] {
+	const marker = "\n\nSources:\n";
+	const start = text.lastIndexOf(marker);
+	if (start < 0) return [];
+	const block = text.slice(start + marker.length).split("\n\n", 1)[0] ?? "";
+	const count = block.split("\n").filter((line) => /^\[\d+\]/.test(line)).length;
+	return count > 0 ? [plural(count, "source")] : [];
+}
+
+function smartProviders(text: string): string[] {
+	const providers = text.split("\n").filter((line) => /^- \S+: /.test(line));
+	const cooling = providers.filter((line) => /, cooldown \d+s/.test(line)).length;
+	if (providers.length === 0) return [];
+	return [plural(providers.length, "provider"), ...(cooling > 0 ? [`${cooling} in cooldown`] : [])];
+}
+
+const SMART_SEARCH_SPECS: [string, InlineSpec][] = [
+	["smart_search_search", { label: "Search", color: LABEL_COLORS.web, subject: query, meta: smartMeta(smartSources) }],
+	["smart_search_fetch", {
+		label: "Fetch",
+		color: LABEL_COLORS.web,
+		subject: url,
+		meta: smartMeta((text) => {
+			const size = /\((\d+(?:\.\d+)?[KMG]?B)\)$/.exec(text.split("\n", 1)[0] ?? "")?.[1];
+			return size ? [size] : [];
+		}),
+	}],
+	["smart_search_research", {
+		label: "Research",
+		color: LABEL_COLORS.web,
+		subject: query,
+		meta: smartMeta(counted(/^(\d+) evidence item\(s\);/m, "evidence", "evidence")),
+	}],
+	["smart_search_exa_search", {
+		label: "Exa",
+		color: LABEL_COLORS.web,
+		subject: query,
+		meta: smartMeta(counted(/^Exa returned (\d+) result/, "result")),
+	}],
+	["smart_search_exa_similar", {
+		label: "Exa",
+		color: LABEL_COLORS.web,
+		subject: (args) => ({ verb: "similar", ...url(args) }),
+		meta: smartMeta(counted(/^Exa returned (\d+) result/, "result")),
+	}],
+	["smart_search_map", {
+		label: "Map",
+		color: LABEL_COLORS.web,
+		subject: url,
+		meta: smartMeta(counted(/^Site map for .* \((\d+) URL\(s\)\):/, "URL")),
+	}],
+	["smart_search_context7_library", {
+		label: "Context7",
+		color: LABEL_COLORS.web,
+		subject: (args) => (str(args.name) ? { target: { text: clip(str(args.name), SUBJECT_WIDTH), kind: "id" } } : {}),
+		meta: smartMeta(counted(/^Context7 returned (\d+) librar/, "library", "libraries")),
+	}],
+	["smart_search_context7_docs", {
+		label: "Context7",
+		color: LABEL_COLORS.web,
+		// 库 id 弱化在前、查询高亮在后：同一个库查不同主题时仍能区分。
+		subject: (args) => {
+			const library = clip(str(args.library_id), SUBJECT_WIDTH);
+			const topic = query(args);
+			if (topic.target) return library ? { verb: library, ...topic } : topic;
+			return library ? { target: { text: library, kind: "id" } } : {};
+		},
+		meta: smartMeta(() => []),
+	}],
+	["smart_search_plan", { label: "Plan", color: LABEL_COLORS.web, subject: query, meta: smartMeta(() => []) }],
+	["smart_search_route", { label: "Route", color: LABEL_COLORS.web, subject: query, meta: smartMeta(() => []) }],
+	["smart_search_doctor", {
+		label: "Doctor",
+		color: LABEL_COLORS.web,
+		subject: () => ({}),
+		// config_status 形如 `ok: configuration complete` / `config_error: …`，只取状态词。
+		meta: smartMeta((text) => {
+			const status = /"config_status":\s*"([a-z_]+)/.exec(text)?.[1];
+			return status ? [status] : [];
+		}),
+	}],
+	["smart_search_providers", {
+		label: "Providers",
+		color: LABEL_COLORS.web,
+		subject: () => ({}),
+		meta: smartMeta(smartProviders),
+	}],
+	["smart_search_tools", {
+		label: "Search Tools",
+		color: LABEL_COLORS.web,
+		subject: (args) => {
+			const groups = Array.isArray(args.groups) ? args.groups.filter((group) => typeof group === "string") : [];
+			return groups.length > 0 ? { verb: "enable", target: { text: groups.join(", "), kind: "id" } } : verbOnly("enable");
+		},
+		meta: (text, details) => {
+			if (!Array.isArray(details?.added)) return defaultMeta(text);
+			const unavailable = Array.isArray(details.unavailable) ? details.unavailable.length : 0;
+			return [
+				details.added.length > 0 ? plural(details.added.length, "tool") : "no new tools",
+				...(unavailable > 0 ? [`${unavailable} unavailable`] : []),
+			];
+		},
+	}],
+];
+
 const INLINE_SPECS = new Map<string, InlineSpec>([
 	["mcp", MCP_SPEC],
 	["mcpScript", MCP_SCRIPT_SPEC],
 	["web_fetch", {
 		label: "Fetch",
 		color: LABEL_COLORS.web,
-		subject: (args) => (str(args.url) ? { target: { text: shortenUrl(str(args.url)), kind: "id" } } : {}),
+		subject: url,
 		meta: (text, details) => {
 			const shown = details?.outputLines;
 			const total = details?.totalLines;
@@ -280,6 +411,7 @@ const INLINE_SPECS = new Map<string, InlineSpec>([
 				: answers.map((answer) => `${str(answer.question)}\n→ ${answerText(answer)}`).join("\n\n");
 		},
 	}],
+	...SMART_SEARCH_SPECS,
 ]);
 
 function specFor(name: string): InlineSpec | undefined {

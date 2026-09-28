@@ -53,7 +53,7 @@
 
 ### 工具展示
 
-- 只给模型看的工具与 `read` 一样折成一行 `✓ 标签  主体 · 徽章 · Ctrl+O`，无外框，Ctrl+O 展开后直接铺正文：MCP（`mcp` / `mcpScript` / `mcp__*`）、`web_fetch`、`search`、`docs_search`、`ctx_*`、`obs_recall`、`ask_user_question`
+- 只给模型看的工具与 `read` 一样折成一行 `✓ 标签  主体 · 徽章 · Ctrl+O`，无外框，Ctrl+O 展开后直接铺正文：MCP（`mcp` / `mcpScript` / `mcp__*`）、`web_fetch`、`search`、`docs_search`、`ctx_*`、`obs_recall`、`ask_user_question`，以及 pi-smart-search 的 `smart_search_*`（徽章取自其摘要行，输出被截断落盘时标 `truncated`）
 - `/skill:name` 调用块与模型 read `SKILL.md` 都显示为 `✓ Skill  name`
 - pi-fff 的 `ffgrep` / `fffind` 复用 Grep / Find 卡片（按文件分组、高亮匹配）
 - 其它卡片完成后若只剩标题（`Ls … empty`、无输出 Bash），同样收成一行
