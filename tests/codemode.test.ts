@@ -6,9 +6,43 @@ import { stripAnsi } from "../src/ansi.ts";
 import { installMessageBorders } from "../src/message-borders.ts";
 import { patchReadmapTool } from "../src/readmap-renderers/patch.ts";
 import { renderCodemodeCall, renderCodemodeResult } from "../src/readmap-renderers/codemode.ts";
-import { parseCodemodeArgs } from "../src/readmap-renderers/codemode-preview.ts";
+import { parseCodemodeArgs, previewCodemodeCalls } from "../src/readmap-renderers/codemode-preview.ts";
+import { renderToolHeader } from "../src/readmap-renderers/header.ts";
+import { resolvePresentation } from "../src/readmap-renderers/presentation.ts";
 
 process.env.PI_READMAP_RENDER_MODE = "color";
+
+test("Codemode 长路径按终端宽度折行，不沿用普通卡片的 48 列缩写", () => {
+	const path = "docs/superpowers/plans/2026-04-10-home-information-architecture-phase1-implementation.md";
+	const args = { input: `*** Begin Patch\n*** Add File: ${path}\n+${"x".repeat(300)}\n*** End Patch` };
+	const calls = [
+		{ name: "apply_patch", args: JSON.stringify(args).slice(0, 197) + "...", status: "ok", durationMs: 61 },
+		{ name: "read", args: JSON.stringify({ path }), status: "ok" },
+	];
+	const component = renderCodemodeResult({ content: [], details: { calls } }, {}, undefined, {});
+	const wide = component.render(180).map(stripAnsi);
+	assert.ok(wide[1]!.includes(path));
+	assert.ok(wide[2]!.includes(path));
+	const narrow = component.render(60).map(stripAnsi);
+	assert.ok(narrow.every((line) => visibleWidth(line) <= 60));
+	assert.ok(narrow.some((line) => line.startsWith("     │")));
+	assert.ok(narrow.map((line) => line.replace(/^     [│ ]   /, "")).join("").includes(path));
+	const card = stripAnsi(renderToolHeader("apply_patch", args, resolvePresentation(undefined), {}, { phase: "success" }));
+	assert.ok(!card.includes(path), "普通卡片仍保持原有路径缩写");
+});
+
+test("Codemode 未闭合补丁字符串恢复转义，生成期即可显示路径", () => {
+	const patch = "*** Begin Patch\n*** Update File: config/test.yaml\n@@\n-a\n+b";
+	for (const quote of ['"', "'"]) {
+		const literal = quote + patch.replaceAll("\n", "\\n");
+		for (const suffix of ["", "\\"]) {
+			const code = `tools.apply_patch({input: ${literal}${suffix}`;
+			assert.equal(parseCodemodeArgs(previewCodemodeCalls(code)[0]!.args)?.input, patch);
+			const lines = renderCodemodeCall({ code }, undefined, {}).render(100).map(stripAnsi).join("\n");
+			assert.match(lines, /◇ Apply_patch  config\/test.yaml/);
+		}
+	}
+});
 
 test("Codemode 标签固定淡紫，不跟随蓝色主题，纯文本模式不注入颜色", () => {
 	const blueTheme = { fg: (_color: string, text: string) => `\u001b[34m${text}\u001b[39m`, bold: (text: string) => text };

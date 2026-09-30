@@ -128,6 +128,7 @@ export function toolSubject(
 	presentation: RenderPresentation,
 	context: RenderContextLike,
 	phase: ToolPhase,
+	pathWidth = 48,
 ): ToolSubject {
 	const record = asRecord(args) ?? {};
 	// pi-fff 用空字符串表示工作目录，与缺省 path 同样显示为 `.`。
@@ -136,7 +137,7 @@ export function toolSubject(
 		: name === "ls" || name === "grep" || name === "find" ? "." : "";
 	const linkedPath = (): string => {
 		if (!path) return styleText(presentation, "toolOutput", "…");
-		const shown = shortenPath(path);
+		const shown = shortenPath(path, pathWidth);
 		const styled = styleText(presentation, "syntaxType", shown);
 		return presentation.mode === "color" ? linkPath(styled, path, context.cwd) : styled;
 	};
@@ -161,7 +162,7 @@ export function toolSubject(
 		const paths = parsePatchEnvelopePaths(input);
 		if (paths.length === 0) return { target: styleText(presentation, "toolOutput", "…"), meta: [] };
 		const primary = displayText(paths[0]!, presentation);
-		const styled = styleText(presentation, "syntaxType", shortenPath(primary));
+		const styled = styleText(presentation, "syntaxType", shortenPath(primary, pathWidth));
 		return {
 			target: presentation.mode === "color" ? linkPath(styled, primary, context.cwd) : styled,
 			meta: paths.length > 1 ? [`${paths.length} files`] : [],

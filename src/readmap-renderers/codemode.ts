@@ -51,7 +51,7 @@ function callTree(calls: Record<string, unknown>[], presentation: RenderPresenta
 		const args = parseCodemodeArgs(rawArgs);
 		const phase: ToolPhase = call.status === "running" || call.status === "preview" ? "running"
 			: call.status === "error" || call.status === "cancelled" ? "error" : "success";
-		const subject = toolSubject(renderName, args, presentation, context, phase);
+		const subject = toolSubject(renderName, args, presentation, context, phase, Infinity);
 		if (!args || !subject.target) {
 			subject.target = styleText(presentation, "muted", displayText(rawArgs, presentation).replace(/\s+/g, " "));
 		}

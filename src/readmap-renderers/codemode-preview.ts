@@ -1,5 +1,5 @@
 /** 只读语法预览：恢复半截参数，不执行表达式或预测控制流。 */
-import { parse as parseStrict } from "acorn";
+import { parse as parseStrict, parseExpressionAt } from "acorn";
 import { parse as parseLoose } from "acorn-loose";
 import { parseStreamingJson } from "@earendil-works/pi-ai";
 import { asPlainRecord } from "../guards.ts";
@@ -13,6 +13,21 @@ function parseSource(source: string) {
 	}
 }
 
+/** loose 的未闭合字符串保留字面转义；补齐引号后交给 Acorn 解码，不执行表达式。 */
+function stringValue(raw: string): string | undefined {
+	const quote = raw[0];
+	const escape = raw.lastIndexOf("\\");
+	for (const candidate of [raw, raw + quote, ...(escape >= 0 ? [raw.slice(0, escape) + quote] : [])]) {
+		try {
+			const node = parseExpressionAt(candidate, 0, { ecmaVersion: "latest" });
+			if (node.type === "Literal" && node.end === candidate.length && typeof node.value === "string") return node.value;
+		} catch {
+			// 尾部转义尚未生成完整时只保留它之前的字符串。
+		}
+	}
+	return undefined;
+}
+
 function objectArgs(value: unknown, source: string): Record<string, unknown> | undefined {
 	const node = asPlainRecord(value);
 	if (node?.type !== "ObjectExpression" || !Array.isArray(node.properties)) return undefined;
@@ -24,8 +39,14 @@ function objectArgs(value: unknown, source: string): Record<string, unknown> | u
 		if (property?.type !== "Property" || property.computed || property.method || property.kind !== "init" || !field) continue;
 		const name = key?.name ?? key?.value;
 		if (typeof name !== "string" || field.name === "✖") continue;
+		const raw = source.slice(Number(field.start), Number(field.end));
+		if (field.type === "Literal" && (raw.startsWith('"') || raw.startsWith("'"))) {
+			const decoded = stringValue(raw);
+			if (decoded !== undefined) result[name] = decoded;
+			continue;
+		}
 		result[name] = field.type === "Literal" && (field.value === null || ["string", "number", "boolean"].includes(typeof field.value))
-			? field.value : source.slice(Number(field.start), Number(field.end));
+			? field.value : raw;
 	}
 	return result;
 }
