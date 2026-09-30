@@ -2,7 +2,7 @@
  * 工具可视化接管的唯一入口（readmap 五件套 + grep/find + apply_patch + 一行式工具）。
  * 实现按职责拆分：presentation（净化/排版）、header（canonical 摘要）、
  * diff、stream-animation（逐字推进/调度）、write-stream / edit-stream（参数流预览）、
- * results（八个工具的内容渲染）、inline（MCP/抓取/检索等一行式描述表）、patch（安装与核心工具桥接）。
+ * results（八个工具的内容渲染）、inline（一行式描述表）、codemode（嵌套调用树）、patch（安装与核心工具桥接）。
  */
 
 import installReadmapRenderers from "./patch.ts";

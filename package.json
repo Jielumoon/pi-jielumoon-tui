@@ -53,5 +53,9 @@
     "@types/node": "^26.1.2",
     "tsx": "^4.23.7",
     "typescript": "^7.0.2"
+  },
+  "dependencies": {
+    "acorn": "8.18.0",
+    "acorn-loose": "8.5.2"
   }
 }

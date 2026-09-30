@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { getCapabilities, hyperlink, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { asRecord } from "../guards.ts";
+import { rgbForeground } from "../gradient.ts";
 import { parsePatchEnvelopePaths } from "./apply-patch.ts";
 import {
 	displayText,
@@ -68,6 +69,8 @@ function shortenPath(path: string, max = 48): string {
 
 function toolLabel(theme: ThemeLike | undefined, name: string, color = "toolTitle"): string {
 	const label = name.length > 0 ? `${name[0]!.toUpperCase()}${name.slice(1)}` : "Tool";
+	// Codemode 固定为 Sakura lavender，不借用可能是蓝色的主题 accent。
+	if (name === "codemode" && theme) return rgbForeground([199, 184, 245], label, true);
 	return themeFg(theme, color, themeBold(theme, label));
 }
 
@@ -119,7 +122,7 @@ export function isLineRangeFormat(value: string): boolean {
  */
 export type ToolSubject = { label?: string; labelColor?: string; target: string; meta: string[] };
 
-function toolSubject(
+export function toolSubject(
 	name: string,
 	args: unknown,
 	presentation: RenderPresentation,

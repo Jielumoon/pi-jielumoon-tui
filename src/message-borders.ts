@@ -12,7 +12,7 @@ import { Markdown, type MarkdownTheme, truncateToWidth, visibleWidth } from "@ea
 import { stripAnsi, trimTerminalPadding } from "./ansi";
 import { formatElapsed } from "./duration";
 import { renderToolHeader, skillSubject } from "./readmap-renderers/header.ts";
-import { isInlineSpecTool, isInlineToolFailed } from "./readmap-renderers/inline.ts";
+import { isInlineTool, isInlineToolFailed } from "./readmap-renderers/inline.ts";
 import { READMAP_RENDERER_MARK } from "./readmap-renderers/patch.ts";
 import { resolvePresentation } from "./readmap-renderers/presentation.ts";
 import {
@@ -175,13 +175,13 @@ function containsResultImage(runtime: ToolRuntime): boolean {
 }
 
 /**
- * 不画外框、与 read 同列缩进的工具。描述表工具只在一行式 renderer 真正接管时才算：
+ * 不画外框、与 read 同列缩进的工具。描述表工具与 Codemode 只在 renderer 真正接管时才算：
  * 工具已卸载（宿主退回 contentText 平铺参数与输出）或 patch 失败时，仍用外框兜住原始内容。
  */
 function isInlineRuntime(runtime: ToolRuntime): boolean {
 	if (runtime.toolName === "read") return true;
 	const definition = runtime.toolDefinition;
-	return isInlineSpecTool(runtime.toolName)
+	return isInlineTool(runtime.toolName)
 		&& isObject(definition)
 		&& (definition as Record<symbol, unknown>)[READMAP_RENDERER_MARK] === true;
 }

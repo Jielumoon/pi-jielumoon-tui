@@ -423,9 +423,9 @@ export function isInlineSpecTool(name: string | undefined): boolean {
 	return name !== undefined && specFor(name) !== undefined;
 }
 
-/** 折成一行显示、不画外框的工具：read 与描述表内的全部工具。 */
+/** 不画外框的工具：read、Codemode 调用树与描述表内的全部工具。 */
 export function isInlineTool(name: string | undefined): boolean {
-	return name === "read" || isInlineSpecTool(name);
+	return name === "read" || name === "codemode" || isInlineSpecTool(name);
 }
 
 /** 结构化失败信号（isError 之外），供外框层决定 × 与失败底色。 */

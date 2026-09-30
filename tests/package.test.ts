@@ -15,6 +15,6 @@ test("package exposes one self-owned extension entry", () => {
 	assert.deepEqual(manifest.pi?.extensions, [
 		"./src/index.ts",
 	]);
-	assert.equal(manifest.dependencies, undefined);
+	assert.deepEqual(Object.keys(manifest.dependencies ?? {}).sort(), ["acorn", "acorn-loose"]);
 	assert.equal(manifest.bundledDependencies, undefined);
 });

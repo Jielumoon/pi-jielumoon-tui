@@ -9,6 +9,7 @@ import { Text, type Component } from "@earendil-works/pi-tui";
 import { isObjectLike as isObject } from "../guards.ts";
 import { installPrototypePatch } from "../prototype-patch-registry.ts";
 import { asThemeLike } from "./presentation.ts";
+import { renderCodemodeCall, renderCodemodeResult } from "./codemode.ts";
 import { isInlineSpecTool, renderInlineToolCall, renderInlineToolResult } from "./inline.ts";
 import {
 	renderApplyPatchResult,
@@ -39,7 +40,7 @@ export const READMAP_RENDERER_MARK = Symbol.for("pi-jielumoon.readmap-renderer")
  * 一行式描述表（MCP、抓取、检索、上下文杂务）另由 isInlineSpecTool 按名判定。
  */
 export const TARGET_TOOL_NAMES = new Set([
-	"read", "edit", "write", "bash", "ls", "grep", "find", "apply_patch", "ffgrep", "fffind",
+	"read", "edit", "write", "bash", "ls", "grep", "find", "apply_patch", "ffgrep", "fffind", "codemode",
 ]);
 
 /** pi-fff 的同类工具复用核心 renderer（参数与输出已由 results 兼容）。 */
@@ -124,6 +125,7 @@ export function patchReadmapTool(
 	const renderCall = (args: unknown, theme: unknown, context: RenderContextLike = {}) => {
 		const t = asThemeLike(theme);
 		try {
+			if (name === "codemode") return renderCodemodeCall(args, t, context);
 			if (inline) return renderInlineToolCall(name, args, t, context);
 			return renderToolCall(
 				renderName,
@@ -148,6 +150,7 @@ export function patchReadmapTool(
 	) => {
 		const t = asThemeLike(theme);
 		try {
+			if (name === "codemode") return renderCodemodeResult(result, options, t, context);
 			if (inline) return renderInlineToolResult(name, result, options, t, context);
 			switch (renderName) {
 				case "read":
