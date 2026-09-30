@@ -11,10 +11,10 @@ import {
 import { Markdown, type MarkdownTheme, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { stripAnsi, trimTerminalPadding } from "./ansi";
 import { formatElapsed } from "./duration";
-import { renderToolHeader, skillSubject } from "./readmap-renderers/header.ts";
-import { isInlineTool, isInlineToolFailed } from "./readmap-renderers/inline.ts";
-import { READMAP_RENDERER_MARK } from "./readmap-renderers/patch.ts";
-import { resolvePresentation } from "./readmap-renderers/presentation.ts";
+import { renderToolHeader, skillSubject } from "./tool-renderers/header.ts";
+import { isInlineTool, isInlineToolFailed } from "./tool-renderers/inline.ts";
+import { READMAP_RENDERER_MARK } from "./tool-renderers/patch.ts";
+import { resolvePresentation } from "./tool-renderers/presentation.ts";
 import {
 	mix,
 	renderBoxedLine,

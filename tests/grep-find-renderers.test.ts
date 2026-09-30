@@ -2,8 +2,8 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import test from "node:test";
 import { ToolExecutionComponent, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import installReadmapRenderers, { patchReadmapTool, READMAP_RENDERER_MARK } from "../src/readmap-renderers/index.ts";
-import { renderFindResult, renderGrepResult } from "../src/readmap-renderers/results.ts";
+import installReadmapRenderers, { patchReadmapTool, READMAP_RENDERER_MARK } from "../src/tool-renderers/index.ts";
+import { renderFindResult, renderGrepResult } from "../src/tool-renderers/results.ts";
 
 // 测试基线固定为 color 模式：宿主终端的 NO_COLOR/TERM 不得改变断言结果。
 process.env.PI_READMAP_RENDER_MODE = "color";
@@ -280,7 +280,7 @@ test("grep highlight degrades safely on hostile patterns", () => {
 });
 
 test("grep 歧义分支不会在渲染线程触发指数回溯", () => {
-	const source = new URL("../src/readmap-renderers/results.ts", import.meta.url).href;
+	const source = new URL("../src/tool-renderers/results.ts", import.meta.url).href;
 	const probe = spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", `
 		import { renderGrepResult } from ${JSON.stringify(source)};
 		const text = "a".repeat(40) + "!";

@@ -9,9 +9,9 @@ import {
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { stripAnsi } from "../src/ansi.ts";
 import { installMessageBorders } from "../src/message-borders.ts";
-import installReadmapRenderers, { isInlineTool } from "../src/readmap-renderers/index.ts";
-import { renderInlineToolResult } from "../src/readmap-renderers/inline.ts";
-import { renderFindResult, renderGrepResult, renderReadResult } from "../src/readmap-renderers/results.ts";
+import installReadmapRenderers, { isInlineTool } from "../src/tool-renderers/index.ts";
+import { renderInlineToolResult } from "../src/tool-renderers/inline.ts";
+import { renderFindResult, renderGrepResult, renderReadResult } from "../src/tool-renderers/results.ts";
 
 // 测试基线固定为 color 模式：宿主终端的 NO_COLOR/TERM 不得改变断言结果。
 process.env.PI_READMAP_RENDER_MODE = "color";

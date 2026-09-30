@@ -1,13 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { visibleWidth } from "@earendil-works/pi-tui";
-import { patchReadmapTool } from "../src/readmap-renderers/index.ts";
+import { patchReadmapTool } from "../src/tool-renderers/index.ts";
 import {
 	EditCallComponent,
 	editStreamInput,
 	renderEditPreviewLines,
-} from "../src/readmap-renderers/edit-stream.ts";
-import type { RenderPresentation } from "../src/readmap-renderers/presentation.ts";
+} from "../src/tool-renderers/edit-stream.ts";
+import type { RenderPresentation } from "../src/tool-renderers/presentation.ts";
 
 // 测试基线固定为 color 模式：宿主终端的 NO_COLOR/TERM 不得改变断言结果。
 process.env.PI_READMAP_RENDER_MODE = "color";

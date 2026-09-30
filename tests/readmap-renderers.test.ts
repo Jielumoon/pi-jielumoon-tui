@@ -9,10 +9,10 @@ import installReadmapRenderers, {
 	clampLine,
 	patchReadmapTool,
 	patchToolPayload,
-} from "../src/readmap-renderers/index.ts";
+} from "../src/tool-renderers/index.ts";
 import { installMessageBorders } from "../src/message-borders.ts";
 import { resolveRenderMode } from "../src/render-mode.ts";
-import { renderBashResult, renderLsResult, renderWriteResult } from "../src/readmap-renderers/results.ts";
+import { renderBashResult, renderLsResult, renderWriteResult } from "../src/tool-renderers/results.ts";
 
 // 测试基线固定为 color 模式：宿主终端的 NO_COLOR/TERM 不得改变断言结果。
 // 显式 plain / screen-reader 用例仍通过 withEnv 覆盖 PI_READMAP_RENDER_MODE。

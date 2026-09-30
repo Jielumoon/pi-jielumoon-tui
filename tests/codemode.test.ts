@@ -4,11 +4,11 @@ import { ToolExecutionComponent, initTheme } from "@earendil-works/pi-coding-age
 import { Text, visibleWidth } from "@earendil-works/pi-tui";
 import { stripAnsi } from "../src/ansi.ts";
 import { installMessageBorders } from "../src/message-borders.ts";
-import { patchReadmapTool } from "../src/readmap-renderers/patch.ts";
-import { renderCodemodeCall, renderCodemodeResult } from "../src/readmap-renderers/codemode.ts";
-import { parseCodemodeArgs, previewCodemodeCalls } from "../src/readmap-renderers/codemode-preview.ts";
-import { renderToolHeader } from "../src/readmap-renderers/header.ts";
-import { resolvePresentation } from "../src/readmap-renderers/presentation.ts";
+import { patchReadmapTool } from "../src/tool-renderers/patch.ts";
+import { renderCodemodeCall, renderCodemodeResult } from "../src/tool-renderers/codemode.ts";
+import { parseCodemodeArgs, previewCodemodeCalls } from "../src/tool-renderers/codemode-preview.ts";
+import { renderToolHeader } from "../src/tool-renderers/header.ts";
+import { resolvePresentation } from "../src/tool-renderers/presentation.ts";
 
 process.env.PI_READMAP_RENDER_MODE = "color";
 
