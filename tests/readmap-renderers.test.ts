@@ -48,6 +48,27 @@ test("原生 write 缺少创建元数据时显示 Write", () => {
 	assert.doesNotMatch(rendered, /Create|Overwrite/);
 });
 
+test("Ls 含换行的结构化文件名不能穿出单列或双列行", () => {
+	const entries = [
+		{ name: "src", type: "dir" },
+		{ name: "except Exception as e:\n    print(失败, e)", type: "file" },
+		{ name: "work", type: "dir" },
+		{ name: "socket.gethostbyname(h)\n尾行", type: "file" },
+	];
+	for (const mode of ["color", "plain", "screen-reader"]) {
+		withEnv("PI_READMAP_RENDER_MODE", mode, () => {
+			const component = renderLsResult({ content: [], details: { ptcValue: { totalEntries: 4, entries } } },
+				{ expanded: true }, theme, { args: { path: "." } });
+			for (const width of [80, 180]) {
+				const lines = component.render(width);
+				assert.ok(lines.every((line) => !line.includes("\n")), "每个 render 元素必须只有一条终端行");
+				assertNoOverflow(lines, width);
+				assert.ok(stripAnsi(lines.join("\n")).includes("socket.gethostbyname(h)\\n尾行"));
+			}
+		});
+	}
+});
+
 test("原生 ls 区分空目录、文件名和截断通知", () => {
 	const render = (text: string, details?: unknown) => renderLsResult({ content: [{ type: "text", text }], details },
 		{ expanded: true }, theme, { args: { path: "." } }).render(100).map(stripAnsi).join("\n");

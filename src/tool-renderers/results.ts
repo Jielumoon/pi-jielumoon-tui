@@ -577,7 +577,8 @@ function lsEntryLines(
 	const items = entries.flatMap((item) => {
 		const entry = asRecord(item);
 		if (typeof entry?.name !== "string") return [];
-		const name = displayText(entry.name, presentation);
+		// 文件名里的换行是名称的一部分，不能成为双列布局中的真实终端换行。
+		const name = displayText(entry.name, presentation).replaceAll("\n", "\\n");
 		const isDirectory = entry.type === "dir";
 		return [{
 			text: `${isDirectory ? "▸" : "·"} ${name}${isDirectory ? "/" : ""}`,
