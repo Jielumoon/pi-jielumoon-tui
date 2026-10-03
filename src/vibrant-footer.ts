@@ -21,6 +21,7 @@ export default function vibrantFooter(
 	pi: ExtensionAPI,
 	subscriptionUsage: SubscriptionUsageSource | undefined,
 	settings: FooterSettings,
+	modelInEditor: () => boolean = () => false,
 ): void {
 	const usageCollector = new SessionUsageCollector();
 	let enabled = true;
@@ -108,6 +109,7 @@ export default function vibrantFooter(
 						snapshot,
 						settings,
 						{
+							modelInEditor: modelInEditor(),
 							branch: footerData.getGitBranch(),
 							extensionStatuses,
 							magicContextModel,

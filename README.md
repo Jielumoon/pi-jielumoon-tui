@@ -8,9 +8,9 @@
 
 ### Footer 与上下文
 
-- 第一行以稳定左右锚点展示路径、分支、会话与 Provider、Model、Thinking level
-- 第二行展示输入/输出 token、缓存、费用、订阅额度与会话耗时；累计包含宿主记录的压缩、分支总结和工具调用用量
-- 上下文使用 8–20 列前景色 compact gauge，不再绘制全宽背景色块或在 Footer 重复百分比
+- 第一行展示路径、分支与会话；Provider、Model、Thinking level 移至 Sakura 输入框上边框右侧，空出的右侧改放会话耗时；其他扩展接管输入框时模型仍在 Footer 显示
+- 第二行展示输入/输出 token、缓存、费用与订阅额度（模型留在 Footer 或关闭路径时，会话耗时仍在此行右侧）；累计包含宿主记录的压缩、分支总结和工具调用用量
+- 上下文使用带括号的 `[▓▓▓░░░]` 前景色条，宽屏 32 格、已用部分为 Sakura 渐变，窄屏自动缩短；保留百分比与 token 数
 - Blackhole 与 Magic Context 二选一占用同一状态行：默认显示 `✦ MC 140K · 36% · idle`；`historian`、`recomp` 和 `⚠ historian failed` 会追加当前 `provider/model`，Blackhole 有快照时可切回 `BH O/R/P/C`；普通扩展状态与 MC 不重复显示
 - 保留原版 Footer 的显示设置和持久化配置
 - 订阅额度紧跟费用 / `sub`；周窗口统一显示为 `7d`
@@ -36,6 +36,7 @@
 ### Sakura 输入框
 
 - Pi 原生编辑器外包一层 Sakura macaron 圆角框
+- 上边框右侧实时显示 Provider、Model 与 Thinking level，标签右侧留八格横线；窄屏优先保留 Working 与滚动提示，逐步省略模型标签
 - Pi ≥0.85 时 Working / retry / compaction 状态嵌进上边框（`╭─ ⠋ Working · 12s ───╮`），不再单占一行；开启 clearOnShrink 时回答结束也不会在输入框上方留 2 行空白。旧宿主保持独立状态行
 - 保留补全、粘贴、历史、Esc 中断和全部 Pi 快捷键
 - 小于 7 列时安全回退原生 Editor，避免双宽字符与光标触发换行递归；发现其它扩展接管 Editor 时自动让位

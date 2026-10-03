@@ -135,19 +135,26 @@ type EditorHarness = {
 	emit(event: string): void;
 	getFactory(): EditorFactory | undefined;
 	setFactory(factory: EditorFactory | undefined): void;
+	isModelInEditor(): boolean;
+	selectModel(id: string, thinkingLevel: string): void;
 };
 
 function installEditorHarness(initialFactory?: EditorFactory): EditorHarness {
 	const handlers = new Map<string, Handler[]>();
 	let factory = initialFactory;
+	let model = { provider: "localcch", id: "gpt-6.1-sol", reasoning: true };
+	let thinkingLevel = "xhigh";
 	const pi = {
+		getThinkingLevel: () => thinkingLevel,
 		on(event: string, handler: Handler) {
 			handlers.set(event, [...(handlers.get(event) ?? []), handler]);
 		},
 	} as unknown as ExtensionAPI;
 	const ctx = {
 		mode: "tui",
+		get model() { return model; },
 		ui: {
+			theme: { fg: (_color: string, text: string) => text, bold: (text: string) => text },
 			getEditorComponent: () => factory,
 			setEditorComponent: (nextFactory: EditorFactory | undefined) => {
 				factory = nextFactory;
@@ -155,8 +162,13 @@ function installEditorHarness(initialFactory?: EditorFactory): EditorHarness {
 		},
 	} as unknown as ExtensionContext;
 
-	installSakuraEditor(pi);
+	const isModelInEditor = installSakuraEditor(pi);
 	return {
+		isModelInEditor,
+		selectModel(id, nextThinkingLevel) {
+			model = { ...model, id };
+			thinkingLevel = nextThinkingLevel;
+		},
 		emit(event: string) {
 			for (const handler of handlers.get(event) ?? []) handler({ type: event }, ctx);
 		},
@@ -166,6 +178,28 @@ function installEditorHarness(initialFactory?: EditorFactory): EditorHarness {
 		},
 	};
 }
+
+test("输入框右上方实时显示模型，保留八格横线并避让 Working 与滚动提示", () => {
+	const harness = installEditorHarness();
+	assert.equal(harness.isModelInEditor(), false);
+	harness.emit("session_start");
+	assert.equal(harness.isModelInEditor(), true);
+	const editor = harness.getFactory()!(tui, editorTheme, keybindings()) as SakuraEditor;
+	assert.match(stripAnsi(editor.render(100)[0]!), / localcch · π gpt-6\.1-sol · ◆ xhigh ────────╮$/);
+	harness.selectModel("gpt-6.2", "high");
+	assert.match(stripAnsi(editor.render(100)[0]!), /localcch · π gpt-6\.2 · ◆ high ────────╮$/);
+	const status = { renderInBorder: () => "⠋ Working · 12s", renderSpinnerInBorder: () => "⠋" };
+	editor.setWorkingStatusIndicator(status);
+	editor.setText(Array.from({ length: 20 }, (_, i) => `line ${i + 1}`).join("\n"));
+	const top = stripAnsi(editor.render(100)[0]!);
+	assert.match(top, /^╭─ ⠋ Working · 12s ─── ↑ \d+ more /);
+	assert.match(top, /localcch · π gpt-6\.2 · ◆ high ────────╮$/);
+	for (const width of [12, 20, 40, 80]) {
+		assert.ok(editor.render(width).every((line) => visibleWidth(line) === width));
+	}
+	harness.setFactory(undefined);
+	assert.equal(harness.isModelInEditor(), false, "其他 Editor 接管时 Footer 恢复模型");
+});
 
 test("Sakura Editor yields to another editor and only cleans up its own factory", () => {
 	const existingFactory: EditorFactory = (currentTui, theme, bindings) =>

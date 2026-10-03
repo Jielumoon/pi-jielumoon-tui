@@ -26,16 +26,18 @@ import type {
 	FooterSnapshot,
 	FooterTheme,
 	IconSet,
+	ModelSnapshot,
 } from "./types.ts";
 
-function renderPathLine(
+/** 输入框与 Footer 共用模型标签和窄屏省略顺序。 */
+export function renderModelLabel(
 	theme: FooterTheme,
-	snapshot: FooterSnapshot,
+	snapshot: { model?: Pick<ModelSnapshot, "provider" | "id" | "reasoning"> | null; thinkingLevel: string },
 	settings: FooterSettings,
-	renderData: FooterRenderData,
 	icons: IconSet,
 	width: number,
 ): string {
+	if (width <= 0) return "";
 	const separator = softSeparator(theme);
 	const thinking = settings.thinking && snapshot.model?.reasoning ? thinkingStyle(snapshot.thinkingLevel) : null;
 	const model = settings.model && snapshot.model
@@ -48,9 +50,40 @@ function renderPathLine(
 		joinParts([model, thinkingLabel], separator),
 		model ?? thinkingLabel ?? "",
 	].filter(Boolean);
+	return rightCandidates.find((candidate) => visibleWidth(candidate) <= width)
+		?? truncateToWidth(rightCandidates.at(-1) ?? "", width, theme.fg("dim", "…"));
+}
+
+function renderElapsed(
+	theme: FooterTheme,
+	snapshot: FooterSnapshot,
+	settings: FooterSettings,
+	icons: IconSet,
+	width: number,
+): string {
+	const elapsed = settings.elapsed ? snapshot.nowMs - snapshot.sessionStartMs : 0;
+	return elapsed >= 5000
+		? truncateToWidth(segment(theme, icons.time, "dim", formatDuration(elapsed), "dim"), width, "…")
+		: "";
+}
+
+/** 模型移入输入框后，计时补到路径行右侧；路径关闭时留在统计行。 */
+const elapsedOnPathLine = (settings: FooterSettings, renderData: FooterRenderData): boolean =>
+	Boolean(renderData.modelInEditor && settings.path);
+
+function renderPathLine(
+	theme: FooterTheme,
+	snapshot: FooterSnapshot,
+	settings: FooterSettings,
+	renderData: FooterRenderData,
+	icons: IconSet,
+	width: number,
+): string {
+	const separator = softSeparator(theme);
 	const rightBudget = settings.path ? Math.max(10, Math.floor(width * (width >= 80 ? 0.48 : 0.42))) : width;
-	const right = rightCandidates.find((candidate) => visibleWidth(candidate) <= rightBudget)
-		?? truncateToWidth(rightCandidates.at(-1) ?? "", rightBudget, theme.fg("dim", "…"));
+	const right = elapsedOnPathLine(settings, renderData)
+		? renderElapsed(theme, snapshot, settings, icons, rightBudget)
+		: renderData.modelInEditor ? "" : renderModelLabel(theme, snapshot, settings, icons, rightBudget);
 	const rightWidth = visibleWidth(right);
 	const leftBudget = rightWidth > 0 ? Math.max(0, width - rightWidth - 2) : width;
 
@@ -263,10 +296,7 @@ function renderStatsLines(
 		segments.push(segment(theme, icons.cost, "warning", amount, "warning"));
 	}
 
-	const elapsed = settings.elapsed ? snapshot.nowMs - snapshot.sessionStartMs : 0;
-	const right = elapsed >= 5000
-		? truncateToWidth(segment(theme, icons.time, "dim", formatDuration(elapsed), "dim"), width, "…")
-		: "";
+	const right = elapsedOnPathLine(settings, renderData) ? "" : renderElapsed(theme, snapshot, settings, icons, width);
 	const rightWidth = visibleWidth(right);
 	const leftBudget = rightWidth > 0 ? Math.min(width, Math.max(16, width - rightWidth - 2)) : width;
 	const quota = settings.extensions
@@ -351,10 +381,8 @@ export function renderFooter(
 ): string[] {
 	const lines: string[] = [];
 
-	if (settings.path || settings.model || settings.provider || settings.thinking) {
-		const pathLine = renderPathLine(theme, snapshot, settings, renderData, icons, width);
-		if (pathLine) lines.push(pathLine);
-	}
+	const pathLine = renderPathLine(theme, snapshot, settings, renderData, icons, width);
+	if (pathLine) lines.push(pathLine);
 	lines.push(...renderStatsLines(theme, snapshot, settings, renderData, icons, width));
 	if (settings.blackhole && snapshot.blackhole) {
 		lines.push(renderBlackholeLine(theme, snapshot.blackhole, icons, width));

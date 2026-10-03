@@ -14,10 +14,10 @@ export default function jielumoonTui(pi: ExtensionAPI): void {
 	const footerSettings = readFooterSettings();
 	installNanoContext(pi, footerSettings);
 	const subscriptionUsage = installSubscriptionUsage(pi);
-	installFooter(pi, subscriptionUsage, footerSettings);
+	const modelInEditor = installSakuraEditor(pi, footerSettings);
+	installFooter(pi, subscriptionUsage, footerSettings, modelInEditor);
 	installThinking(pi);
 	installMessageBorders(pi, footerSettings);
 	installWorking(pi);
-	installSakuraEditor(pi);
 	installReadmapRenderers(pi, footerSettings);
 }

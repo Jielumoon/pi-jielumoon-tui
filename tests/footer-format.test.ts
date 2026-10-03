@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { visibleWidth } from "@earendil-works/pi-tui";
+import { stripAnsi } from "../src/ansi.ts";
 import { formatCwd, formatDuration, formatTokens, layoutSegments } from "../src/footer/format.ts";
 import { renderFooter } from "../src/footer/render.ts";
 import installNanoContext, { renderContextLine, type ContextSnapshot } from "../src/nano-context.ts";
@@ -107,7 +108,6 @@ test("完整 Footer 在极窄终端和仅计时状态下也不溢出", () => {
 
 test("nano context uses a compact foreground gauge without full-width backgrounds", () => {
 	const context: ContextSnapshot = {
-		segments: { system: 8_000, prompt: 6_000, assistant: 5_000, thinking: 3_000, tools: 5_520 },
 		usedTokens: 27_520,
 		contextWindow: 128_000,
 		usageIsEstimated: false,
@@ -121,7 +121,13 @@ test("nano context uses a compact foreground gauge without full-width background
 	const wide = renderContextLine(context, 80, theme as never);
 	assert.match(wide, /21\.5%/);
 	assert.match(wide, /28k\/128k/);
+	assert.match(stripAnsi(wide), /\[▓{7}░{25}\]/);
+	assert.match(wide, /\x1b\[38;2;242;167;198m▓/);
+	assert.match(wide, /\x1b\[38;2;159;211;242m▓/);
+	assert.doesNotMatch(wide, /█/);
 	assert.ok(visibleWidth(wide) < 80);
+	assert.match(stripAnsi(renderContextLine({ ...context, usedTokens: 0 }, 80, theme as never)), /\[░{32}\]/);
+	assert.match(stripAnsi(renderContextLine({ ...context, usedTokens: 256_000 }, 80, theme as never)), /\[▓{32}\]/);
 });
 
 
@@ -228,6 +234,24 @@ test("footer omits an empty identity row when the selected model is unavailable"
 		icons,
 	);
 	assert.deepEqual(lines, []);
+});
+
+test("模型移入输入框后计时上移到路径行右侧，其他 Editor 仍保留模型", () => {
+	const data = { branch: "main", extensionStatuses: new Map<string, string>() };
+	const render = (modelInEditor: boolean) => renderFooter(snapshot, DEFAULT_FOOTER_SETTINGS,
+		{ ...data, modelInEditor }, 100, theme, icons);
+	const [pathLine, ...rest] = render(true);
+	assert.match(pathLine ?? "", /^P .*B main.* T 1m12s$/);
+	assert.equal(visibleWidth(pathLine ?? ""), 100);
+	assert.doesNotMatch(rest.join("\n"), /T 1m12s/);
+	assert.doesNotMatch(render(true).join("\n"), /openai|M gpt-5|K high/);
+	const [legacyPath, legacyStats] = render(false);
+	assert.match(legacyPath ?? "", /openai · M gpt-5 · K high$/);
+	assert.ok(legacyStats?.endsWith("T 1m12s"));
+	const noPath = renderFooter(snapshot, { ...DEFAULT_FOOTER_SETTINGS, path: false },
+		{ ...data, modelInEditor: true }, 100, theme, icons);
+	assert.equal(noPath.length, 1, "路径关闭时不单独占一行");
+	assert.ok(noPath[0]?.endsWith("T 1m12s"));
 });
 
 

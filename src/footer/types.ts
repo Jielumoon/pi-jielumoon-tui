@@ -208,6 +208,7 @@ export type FooterSnapshot = {
 };
 
 export type FooterRenderData = {
+	modelInEditor?: boolean;
 	branch: string | null;
 	extensionStatuses: ReadonlyMap<string, string>;
 	subscriptionUsage?: SubscriptionUsageState;

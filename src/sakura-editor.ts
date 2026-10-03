@@ -7,6 +7,8 @@ import {
 import { truncateToWidth, visibleWidth, type EditorTheme, type TUI } from "@earendil-works/pi-tui";
 import { stripAnsi } from "./ansi.ts";
 import { renderSakuraFrameGradient, renderSakuraFrameSegment, renderSakuraSolid } from "./gradient.ts";
+import { renderModelLabel } from "./footer/render.ts";
+import { DEFAULT_FOOTER_SETTINGS, getIcons, type FooterSettings } from "./footer/types.ts";
 
 const FRAME_CHROME_WIDTH = 4;
 const MIN_CONTENT_WIDTH = 3;
@@ -43,7 +45,8 @@ function findBottomBorderIndex(lines: readonly string[]): number {
 	return Math.max(0, lines.length - 1);
 }
 
-function roundedBorder(width: number, edge: "top" | "bottom", sourceLine?: string, status?: BorderStatus): string {
+function roundedBorder(width: number, edge: "top" | "bottom", sourceLine?: string, status?: BorderStatus,
+	modelLabel?: (width: number) => string): string {
 	if (width <= 0) return "";
 	if (width === 1) return renderSakuraSolid(edge === "top" ? "╭" : "╰");
 
@@ -52,8 +55,8 @@ function roundedBorder(width: number, edge: "top" | "bottom", sourceLine?: strin
 	const plainSource = sourceLine === undefined ? "" : stripAnsi(sourceLine);
 	const scrollMatch = plainSource.match(SCROLL_LABEL);
 
-	if (status) {
-		const embedded = statusTopBorder(width, scrollMatch?.[1], status);
+	if (status || modelLabel) {
+		const embedded = topBorderWithLabels(width, scrollMatch?.[1], status, modelLabel);
 		if (embedded) return embedded;
 	}
 
@@ -68,23 +71,31 @@ function roundedBorder(width: number, edge: "top" | "bottom", sourceLine?: strin
 }
 
 /**
- * `╭─ ⠋ Working · 12s ─── ↑ 3 more ───╮`：状态保留自身配色，两侧边框按整条连续渐变。
- * 放不下完整状态时退到只有 spinner；连 spinner 都放不下则交回普通边框。
+ * 左侧状态与滚动提示优先，右侧模型标签后留八格横线；标签保留自身配色。
+ * 放不下完整状态时退到只有 spinner，其余横线按整条连续渐变。
  */
-function statusTopBorder(width: number, scroll: string | undefined, status: BorderStatus): string | undefined {
-	const head = "╭─ ";
-	const gap = scroll ? ` ─── ${scroll} ` : " ";
+function topBorderWithLabels(width: number, scroll: string | undefined, status: BorderStatus | undefined,
+	modelLabel: ((width: number) => string) | undefined): string | undefined {
+	const statusHead = "╭─ ";
+	const statusGap = scroll ? ` ─── ${scroll} ` : " ";
 	// 右侧至少留一格横线和右角。
-	const budget = width - visibleWidth(head) - visibleWidth(gap) - 2;
-	if (budget < 1) return undefined;
-	let inset = status.renderInBorder(width);
-	if (visibleWidth(inset) > budget) inset = status.renderSpinnerInBorder?.(budget) ?? "";
+	const budget = Math.max(0, width - visibleWidth(statusHead) - visibleWidth(statusGap) - 2);
+	let inset = budget > 0 ? status?.renderInBorder(width) ?? "" : "";
+	if (visibleWidth(inset) > budget) inset = status?.renderSpinnerInBorder?.(budget) ?? "";
 	inset = truncateToWidth(inset, budget, "");
 	const insetWidth = visibleWidth(inset);
-	if (insetWidth === 0) return undefined;
+	const head = insetWidth > 0 ? statusHead : "╭";
+	const gap = insetWidth > 0 ? statusGap : scroll ? `─── ${scroll} ` : "";
 	const tailStart = visibleWidth(head) + insetWidth;
-	const tail = `${gap}${"─".repeat(width - tailStart - visibleWidth(gap) - 1)}╮`;
-	return `${renderSakuraFrameSegment(head, 0, width)}${inset}${renderSakuraFrameSegment(tail, tailStart, width)}`;
+	// 模型前后各一格空白、右侧八格横线和右角，标签之间至少一格横线。
+	const modelBudget = Math.max(0, width - tailStart - visibleWidth(gap) - 12);
+	const model = truncateToWidth(modelLabel?.(modelBudget) ?? "", modelBudget, "");
+	if (insetWidth === 0 && !model) return undefined;
+	const rightTail = model ? " ────────╮" : "╮";
+	const fillWidth = width - tailStart - visibleWidth(gap) - visibleWidth(model) - visibleWidth(rightTail) - (model ? 1 : 0);
+	const middle = `${gap}${"─".repeat(fillWidth)}${model ? " " : ""}`;
+	return `${renderSakuraFrameSegment(head, 0, width)}${inset}${renderSakuraFrameSegment(middle, tailStart, width)}${model}`
+		+ renderSakuraFrameSegment(rightTail, width - visibleWidth(rightTail), width);
 }
 
 function framedBodyLine(line: string, innerWidth: number): string {
@@ -105,7 +116,8 @@ export class SakuraEditor extends CustomEditor {
 	readonly embedWorkingStatus = true;
 	private borderStatus: BorderStatus | undefined;
 
-	constructor(tui: TUI, editorTheme: EditorTheme, keybindings: KeybindingsManager) {
+	constructor(tui: TUI, editorTheme: EditorTheme, keybindings: KeybindingsManager,
+		private readonly modelLabel?: (width: number) => string) {
 		super(tui, editorTheme, keybindings, { paddingX: 0 });
 	}
 
@@ -131,7 +143,7 @@ export class SakuraEditor extends CustomEditor {
 
 		if (baseLines.length < 2 || bottomIndex <= 0) return baseLines;
 
-		const lines = [roundedBorder(width, "top", baseLines[0], this.borderStatus)];
+		const lines = [roundedBorder(width, "top", baseLines[0], this.borderStatus, this.modelLabel)];
 		for (let index = 1; index < bottomIndex; index++) {
 			lines.push(framedBodyLine(baseLines[index] ?? "", innerWidth));
 		}
@@ -155,14 +167,15 @@ type InstalledEditor = {
  * Editor API 不支持安全地组合两个任意工厂。已有自定义 Editor 时主动让位，
  * 避免覆盖其它扩展的输入法、Vim 模式或快捷键实现。
  */
-export default function installSakuraEditor(pi: ExtensionAPI): void {
+export default function installSakuraEditor(pi: ExtensionAPI, settings: FooterSettings = DEFAULT_FOOTER_SETTINGS): () => boolean {
 	let installed: InstalledEditor | undefined;
 
 	pi.on("session_start", (_event, ctx) => {
 		if (ctx.mode !== "tui" || ctx.ui.getEditorComponent() !== undefined) return;
 
 		const factory: EditorFactory = (tui, editorTheme, keybindings) =>
-			new SakuraEditor(tui, editorTheme, keybindings);
+			new SakuraEditor(tui, editorTheme, keybindings, (width) => renderModelLabel(ctx.ui.theme,
+				{ model: ctx.model, thinkingLevel: pi.getThinkingLevel() }, settings, getIcons(), width));
 		installed = { ui: ctx.ui, factory };
 		ctx.ui.setEditorComponent(factory);
 	});
@@ -174,4 +187,6 @@ export default function installSakuraEditor(pi: ExtensionAPI): void {
 		if (ctx.ui.getEditorComponent() === installed.factory) ctx.ui.setEditorComponent(undefined);
 		installed = undefined;
 	});
+
+	return () => installed !== undefined && installed.ui.getEditorComponent() === installed.factory;
 }

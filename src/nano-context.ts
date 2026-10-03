@@ -8,7 +8,7 @@ import {
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { formatTokens } from "./footer/format.ts";
 import type { FooterSettings } from "./footer/types.ts";
-import { rgbForeground, type RGB } from "./gradient.ts";
+import { renderSakuraGradient } from "./gradient.ts";
 import { isRecord } from "./guards.ts";
 import { estimateTextTokens } from "./token-estimate.ts";
 
@@ -16,14 +16,14 @@ const WIDGET_KEY = "nano-context";
 const IMAGE_TOKEN_ESTIMATE = 1200;
 
 const COMPACT_BAR_MIN_WIDTH = 8;
-const COMPACT_BAR_MAX_WIDTH = 20;
+const COMPACT_BAR_MAX_WIDTH = 32;
 
-const USED_SEGMENTS: ReadonlyArray<{ key: "system" | "prompt" | "assistant" | "thinking" | "tools"; color: RGB }> = [
-	{ key: "system", color: [130, 202, 122] }, // #82CA7A
-	{ key: "prompt", color: [232, 155, 193] }, // #E89BC1
-	{ key: "assistant", color: [139, 199, 194] }, // #8BC7C2
-	{ key: "thinking", color: [115, 208, 210] }, // #73D0D2
-	{ key: "tools", color: [216, 166, 87] }, // #D8A657
+const USED_SEGMENTS = [
+	{ key: "system" },
+	{ key: "prompt" },
+	{ key: "assistant" },
+	{ key: "thinking" },
+	{ key: "tools" },
 ] as const;
 
 
@@ -32,7 +32,6 @@ type ContextSegments = Readonly<Record<ContextSegmentKey, number>>;
 type WritableContextSegments = Record<ContextSegmentKey, number>;
 
 export type ContextSnapshot = Readonly<{
-	segments: ContextSegments;
 	usedTokens: number;
 	contextWindow: number;
 	usageIsEstimated: boolean;
@@ -141,46 +140,6 @@ const segmentSessionMessages = (messages: readonly unknown[], systemPrompt: stri
 const segmentTotal = (segments: ContextSegments): number =>
 	USED_SEGMENTS.reduce((total, segment) => total + segments[segment.key], 0);
 
-const allocateProportionally = (values: readonly number[], columns: number): readonly number[] => {
-	if (columns <= 0) return values.map(() => 0);
-
-	const total = values.reduce((sum, value) => sum + value, 0);
-	if (total <= 0) return values.map(() => 0);
-
-	const rawColumns = values.map((value) => (value / total) * columns);
-	const allocatedColumns = rawColumns.map(Math.floor);
-	let remainingColumns = columns - allocatedColumns.reduce((sum, value) => sum + value, 0);
-
-	const largestRemainders = rawColumns
-		.map((value, index) => ({ index, remainder: value - Math.floor(value) }))
-		.sort((left, right) => right.remainder - left.remainder);
-
-	for (let index = 0; index < largestRemainders.length && remainingColumns > 0; index++, remainingColumns--) {
-		const slot = largestRemainders[index]!;
-		allocatedColumns[slot.index] = (allocatedColumns[slot.index] ?? 0) + 1;
-	}
-
-	return allocatedColumns;
-};
-
-const segmentsFromValues = (values: readonly number[]): ContextSegments => {
-	const segments = emptyContextSegments();
-
-	for (const [index, segment] of USED_SEGMENTS.entries()) {
-		segments[segment.key] = values[index] ?? 0;
-	}
-
-	return segments;
-};
-
-const scaleSegmentsToUsage = (segments: ContextSegments, usedTokens: number): ContextSegments => {
-	if (usedTokens <= 0 || segmentTotal(segments) <= 0) return segments;
-
-	const values = USED_SEGMENTS.map((segment) => segments[segment.key]);
-
-	return segmentsFromValues(allocateProportionally(values, Math.round(usedTokens)));
-};
-
 const sessionMessages = (ctx: ExtensionContext): readonly unknown[] => {
 	const context = buildSessionContext(ctx.sessionManager.getEntries(), ctx.sessionManager.getLeafId());
 	return context.messages as readonly unknown[];
@@ -195,37 +154,17 @@ const makeContextSnapshot = (ctx: ExtensionContext, messages: readonly unknown[]
 	const contextWindow = usage?.contextWindow ?? ctx.model?.contextWindow ?? 0;
 
 	return {
-		segments: scaleSegmentsToUsage(rawSegments, usedTokens),
 		usedTokens,
 		contextWindow,
 		usageIsEstimated: measuredTokens === undefined,
 	};
 };
 
-const allocateBarColumns = (values: readonly number[], width: number): readonly number[] => {
-	const visibleUsedSegments = USED_SEGMENTS
-		.map((_, index) => index)
-		.filter((index) => (values[index] ?? 0) > 0);
-
-	if (visibleUsedSegments.length === 0 || visibleUsedSegments.length >= width) {
-		return allocateProportionally(values, width);
-	}
-
-	const minimumColumns = Array.from({ length: values.length }, () => 0);
-	for (const index of visibleUsedSegments) minimumColumns[index] = 1;
-	const remainingColumns = allocateProportionally(values, width - visibleUsedSegments.length);
-	return minimumColumns.map((minimum, index) => minimum + (remainingColumns[index] ?? 0));
-};
-
 const renderCompactBar = (snapshot: ContextSnapshot, width: number, theme: Theme): string => {
-	const freeTokens = Math.max(0, snapshot.contextWindow - snapshot.usedTokens);
-	const values = [...USED_SEGMENTS.map((segment) => snapshot.segments[segment.key]), freeTokens];
-	const columns = allocateBarColumns(values, width);
-	const used = USED_SEGMENTS
-		.map((segment, index) => rgbForeground(segment.color, "█".repeat(columns[index] ?? 0)))
-		.join("");
-	const free = theme.fg("dim", "░".repeat(columns[USED_SEGMENTS.length] ?? 0));
-	return `${used}${free}`;
+	const usedWidth = Math.max(0, Math.min(width, Math.round(width * snapshot.usedTokens / snapshot.contextWindow)));
+	const used = renderSakuraGradient("▓".repeat(usedWidth));
+	const free = theme.fg("dim", "░".repeat(width - usedWidth));
+	return `${theme.fg("dim", "[")}${used}${free}${theme.fg("dim", "]")}`;
 };
 
 export const renderContextLine = (snapshot: ContextSnapshot, width: number, theme: Theme): string => {
@@ -240,14 +179,12 @@ export const renderContextLine = (snapshot: ContextSnapshot, width: number, them
 	const percentText = theme.fg(tone, percent);
 	if (width < 20) return fitStyledText(`${label} ${percentText}`, width);
 
-	const preferredBarWidth = width >= 80 ? COMPACT_BAR_MAX_WIDTH : width >= 50 ? 14 : COMPACT_BAR_MIN_WIDTH;
+	const preferredBarWidth = width >= 80 ? COMPACT_BAR_MAX_WIDTH : width >= 50 ? 24 : COMPACT_BAR_MIN_WIDTH;
 	const detailedSuffix = ` ${percent} · ${total}`;
 	const compactSuffix = ` ${percent}`;
-	const suffix = preferredBarWidth + 4 + visibleWidth(detailedSuffix) <= width ? detailedSuffix : compactSuffix;
-	const availableBarWidth = Math.max(
-		COMPACT_BAR_MIN_WIDTH,
-		Math.min(preferredBarWidth, width - visibleWidth("ctx ") - visibleWidth(suffix)),
-	);
+	const suffix = preferredBarWidth + 6 + visibleWidth(detailedSuffix) <= width ? detailedSuffix : compactSuffix;
+	const availableBarWidth = Math.min(preferredBarWidth, width - visibleWidth("ctx []") - visibleWidth(suffix));
+	if (availableBarWidth < COMPACT_BAR_MIN_WIDTH) return fitStyledText(`${label} ${percentText}`, width);
 	const bar = renderCompactBar(snapshot, availableBarWidth, theme);
 	const styledSuffix = suffix === detailedSuffix
 		? ` ${percentText}${theme.fg("dim", ` · ${total}`)}`
