@@ -254,6 +254,29 @@ test("模型移入输入框后计时上移到路径行右侧，其他 Editor 仍
 	assert.ok(noPath[0]?.endsWith("T 1m12s"));
 });
 
+test("后台任务状态放在计时下方，放不下时留在状态行", () => {
+	const bg = "\x1b[48;5;153m\x1b[38;5;17m bg 3 running · 1 done · Shift↓ · /bg-clear \x1b[0m";
+	const render = (modelInEditor: boolean, width: number, status = bg) => renderFooter(snapshot, DEFAULT_FOOTER_SETTINGS, {
+		branch: "main",
+		extensionStatuses: new Map([["background-tasks", status], ["yolo", "yolo"]]),
+		modelInEditor,
+	}, width, theme, icons);
+
+	const stats = "I 1.2k O 340 · R 800 W 100 H 38% · $ 0.024";
+	const [pathLine, statsLine, statusLine, ...rest] = render(true, 100);
+	assert.ok(pathLine?.endsWith("T 1m12s"));
+	assert.equal(statsLine, stats + " ".repeat(100 - visibleWidth(stats) - visibleWidth(bg)) + bg);
+	assert.equal(statusLine, "yolo");
+	assert.deepEqual(rest, []);
+	assert.equal(render(true, 100, "idle")[1], stats, "quiet 状态不停靠");
+
+	for (const [modelInEditor, width] of [[false, 100], [true, 40]] as const) {
+		const lines = render(modelInEditor, width);
+		assert.equal(lines.filter((line) => line.includes(" bg 3 running")).length, 1);
+		assert.match(lines.at(-1) ?? "", /^\x1b\[48;5;153m.* bg 3 running/, "放不下时留在状态行");
+	}
+});
+
 
 test("subscription quota follows subscription cost before elapsed", () => {
 	const renderData = {

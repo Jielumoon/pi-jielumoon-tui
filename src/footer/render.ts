@@ -317,6 +317,7 @@ function renderStatsLines(
 }
 
 const PLANNING_STATUS_KEY = "planning-with-files";
+const BACKGROUND_TASKS_STATUS_KEY = "background-tasks";
 const QUIET_STATE_PATTERN = "(?:ready|complete|completed|idle|ok)";
 const QUIET_STATE_RE = new RegExp(`^${QUIET_STATE_PATTERN}$`, "i");
 const PLANNING_DONE_RE = /^\d+\/\d+\s+phases?\s+completed?$/i;
@@ -344,9 +345,11 @@ function renderExtensionStatusLine(
 	statuses: ReadonlyMap<string, string>,
 	width: number,
 	showPlanning: boolean,
+	dockedKey?: string,
 ): string | null {
 	const entries = Array.from(statuses.entries())
-		.map(([key, text]) => [key, text.replace(/[\r\n\t]/g, " ").replace(/ +/g, " ").trim()] as const)
+		.filter(([key]) => key !== dockedKey)
+		.map(([key, text]) => [key, sanitizeStatusText(text)] as const)
 		.filter(([key, text]) => key !== MAGIC_CONTEXT_STATUS_KEY && Boolean(text) && !isQuietExtensionStatus(key, text));
 	if (entries.length === 0) return null;
 
@@ -383,7 +386,16 @@ export function renderFooter(
 
 	const pathLine = renderPathLine(theme, snapshot, settings, renderData, icons, width);
 	if (pathLine) lines.push(pathLine);
-	lines.push(...renderStatsLines(theme, snapshot, settings, renderData, icons, width));
+	const statsLines = renderStatsLines(theme, snapshot, settings, renderData, icons, width);
+	// 计时上移后统计行右侧空出，后台任务放在计时下方；放不下时留在状态行。
+	const backgroundTasks = settings.extensions && elapsedOnPathLine(settings, renderData)
+		? sanitizeStatusText(renderData.extensionStatuses.get(BACKGROUND_TASKS_STATUS_KEY) ?? "")
+		: "";
+	const dockBackgroundTasks = statsLines.length === 1 && backgroundTasks !== ""
+		&& !isQuietExtensionStatus(BACKGROUND_TASKS_STATUS_KEY, backgroundTasks)
+		&& visibleWidth(statsLines[0]!) + 2 + visibleWidth(backgroundTasks) <= width;
+	if (dockBackgroundTasks) statsLines[0] = padBetween(statsLines[0]!, backgroundTasks, width);
+	lines.push(...statsLines);
 	if (settings.blackhole && snapshot.blackhole) {
 		lines.push(renderBlackholeLine(theme, snapshot.blackhole, icons, width));
 	} else if (settings.magicContext) {
@@ -394,7 +406,8 @@ export function renderFooter(
 		}
 	}
 	if (settings.extensions) {
-		const statusLine = renderExtensionStatusLine(theme, renderData.extensionStatuses, width, settings.planning);
+		const statusLine = renderExtensionStatusLine(theme, renderData.extensionStatuses, width, settings.planning,
+			dockBackgroundTasks ? BACKGROUND_TASKS_STATUS_KEY : undefined);
 		if (statusLine) lines.push(statusLine);
 	}
 

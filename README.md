@@ -9,7 +9,7 @@
 ### Footer 与上下文
 
 - 第一行展示路径、分支与会话；Provider、Model、Thinking level 移至 Sakura 输入框上边框右侧，空出的右侧改放会话耗时；其他扩展接管输入框时模型仍在 Footer 显示
-- 第二行展示输入/输出 token、缓存、费用与订阅额度（模型留在 Footer 或关闭路径时，会话耗时仍在此行右侧）；累计包含宿主记录的压缩、分支总结和工具调用用量
+- 第二行展示输入/输出 token、缓存、费用与订阅额度（模型留在 Footer 或关闭路径时，会话耗时仍在此行右侧；耗时上移后，pi-background-tasks 的 `bg …` 状态补到此行右侧，放不下时留在扩展状态行）；累计包含宿主记录的压缩、分支总结和工具调用用量
 - 上下文使用带括号的 `[▓▓▓░░░]` 前景色条，宽屏 32 格、已用部分为 Sakura 渐变，窄屏自动缩短；保留百分比与 token 数
 - Blackhole 与 Magic Context 二选一占用同一状态行：默认显示 `✦ MC 140K · 36% · idle`；`historian`、`recomp` 和 `⚠ historian failed` 会追加当前 `provider/model`，Blackhole 有快照时可切回 `BH O/R/P/C`；普通扩展状态与 MC 不重复显示
 - 保留原版 Footer 的显示设置和持久化配置
